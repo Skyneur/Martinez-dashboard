@@ -34,9 +34,13 @@ export const timeAgo = (dateStr: string): string => {
 
 export const roleLabel = (role: Role): string => {
   const map: Record<Role, string> = {
-    boss: 'Boss',
-    capo: 'Capo',
-    soldato: 'Soldato',
+    boss:    'Boss',
+    oncle:   'Oncle',
+    segundo: 'Segundo',
+    capo:    'Capo',
+    bandito: 'Bandito',
+    soldato: 'Soldado',
+    recrue:  'Recrue',
     associe: 'Associé',
   };
   return map[role];
@@ -44,9 +48,13 @@ export const roleLabel = (role: Role): string => {
 
 export const roleColor = (role: Role): string => {
   const map: Record<Role, string> = {
-    boss: '#c41e3a',
-    capo: '#f97316',
-    soldato: '#eab308',
+    boss:    '#c41e3a',
+    oncle:   '#e11d48',
+    segundo: '#f97316',
+    capo:    '#d4af37',
+    bandito: '#84cc16',
+    soldato: '#22c55e',
+    recrue:  '#94a3b8',
     associe: '#64748b',
   };
   return map[role];
@@ -54,10 +62,14 @@ export const roleColor = (role: Role): string => {
 
 export const roleBgColor = (role: Role): string => {
   const map: Record<Role, string> = {
-    boss: 'rgba(196,30,58,0.15)',
-    capo: 'rgba(249,115,22,0.12)',
-    soldato: 'rgba(234,179,8,0.12)',
-    associe: 'rgba(100,116,139,0.12)',
+    boss:    'rgba(196,30,58,0.15)',
+    oncle:   'rgba(225,29,72,0.12)',
+    segundo: 'rgba(249,115,22,0.12)',
+    capo:    'rgba(212,175,55,0.12)',
+    bandito: 'rgba(132,204,22,0.12)',
+    soldato: 'rgba(34,197,94,0.12)',
+    recrue:  'rgba(148,163,184,0.10)',
+    associe: 'rgba(100,116,139,0.10)',
   };
   return map[role];
 };

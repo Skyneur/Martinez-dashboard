@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { Wallet, TrendingUp, Users, Target, ShieldCheck, LogIn } from 'lucide-react';
 import Sidebar from './components/Sidebar';
@@ -11,26 +11,19 @@ import MemberModal from './components/MemberModal';
 import OperationsPlanner from './components/OperationsPlanner';
 import SelfReportsPage from './components/SelfReportsPage';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import {
-  ACTIVE_MEMBERS,
-  ACTIVE_MISSIONS,
-  MEMBERS,
-  MISSIONS,
-  TOTAL_PROPRE,
-  TOTAL_SALE,
-  TRANSACTIONS,
-  VAULT_TOTAL,
-  WEEKLY_PRODUCTION,
-} from './data/mockData';
+import { DataProvider, useData } from './context/DataContext';
 import type { Member } from './types';
 import { formatMoney, formatDateTime } from './utils/format';
 import {
   fetchDiscordUser,
+  fetchGuildMember,
   mapDiscordUserToAuthUser,
   parseDiscordTokenFromHash,
   startDiscordOAuth,
   validateDiscordState,
 } from './utils/discordAuth';
+
+// ── Login ─────────────────────────────────────────────────────────────────────
 
 function LoginPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -88,18 +81,23 @@ function LoginPage() {
   );
 }
 
+// ── Discord callback ──────────────────────────────────────────────────────────
+
 function DiscordCallbackPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  useEffect(() => {
+  useMemo(() => {
     const run = async () => {
       try {
         const { token, state } = parseDiscordTokenFromHash();
         validateDiscordState(state);
-        const discordUser = await fetchDiscordUser(token);
-        const authUser = mapDiscordUserToAuthUser(discordUser);
+        const [discordUser, guildMember] = await Promise.all([
+          fetchDiscordUser(token),
+          fetchGuildMember(token),
+        ]);
+        const authUser = mapDiscordUserToAuthUser(discordUser, guildMember);
         login(authUser);
         window.history.replaceState(null, '', '/dashboard');
         navigate('/dashboard', { replace: true });
@@ -107,9 +105,9 @@ function DiscordCallbackPage() {
         setErrorMsg(error instanceof Error ? error.message : 'Erreur lors du callback Discord.');
       }
     };
-
     run();
-  }, [login, navigate]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="min-h-full flex items-center justify-center p-6 bg-bg-base">
@@ -133,70 +131,75 @@ function DiscordCallbackPage() {
   );
 }
 
-function DashboardPage() {
-  const topMembers = useMemo(
-    () => [...MEMBERS].sort((a, b) => b.weeklyEarned - a.weeklyEarned).slice(0, 3),
-    [],
+// ── Loading screen ────────────────────────────────────────────────────────────
+
+function LoadingScreen() {
+  return (
+    <div className="min-h-full flex items-center justify-center bg-bg-base">
+      <div className="text-center">
+        <div
+          className="w-10 h-10 rounded-full mx-auto mb-4 animate-spin"
+          style={{ border: '2px solid rgba(196,30,58,0.2)', borderTopColor: '#c41e3a' }}
+        />
+        <p className="text-sm text-ink-secondary font-mono">Chargement des données...</p>
+      </div>
+    </div>
   );
+}
+
+function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="min-h-full flex items-center justify-center bg-bg-base p-6">
+      <div className="gang-card w-full max-w-md p-8 text-center">
+        <p className="text-sale text-sm font-mono">{message}</p>
+        <button className="btn-crimson mt-4" onClick={onRetry}>Réessayer</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+function DashboardPage() {
+  const { members, missions, loading, error, refetch } = useData();
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
+
+  const vaultTotal = useMemo(() => members.reduce((s, m) => s + m.totalEarned, 0), [members]);
+  const weeklyProduction = useMemo(() => members.reduce((s, m) => s + m.weeklyEarned, 0), [members]);
+  const activeMembers = useMemo(() => members.filter((m) => m.active).length, [members]);
+  const activeMissions = useMemo(() => missions.filter((m) => m.status === 'active').length, [missions]);
+  const topMembers = useMemo(
+    () => [...members].sort((a, b) => b.weeklyEarned - a.weeklyEarned).slice(0, 3),
+    [members],
+  );
+
+  if (loading) return <LoadingScreen />;
+  if (error) return <ErrorScreen message={error} onRetry={refetch} />;
 
   return (
     <>
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <KPICard
-          label="Coffre Total"
-          value={formatMoney(VAULT_TOTAL)}
-          icon={Wallet}
-          accentColor="#B4005D"
-          trend={12}
-          trendLabel="vs mois dernier"
-        />
-        <KPICard
-          label="Production Hebdo"
-          value={formatMoney(WEEKLY_PRODUCTION)}
-          icon={TrendingUp}
-          accentColor="#d4af37"
-          trend={7}
-        />
-        <KPICard
-          label="Membres Actifs"
-          value={String(ACTIVE_MEMBERS)}
-          subValue="/ 10"
-          icon={Users}
-          accentColor="#22c55e"
-          trend={0}
-        />
-        <KPICard
-          label="Missions Actives"
-          value={String(ACTIVE_MISSIONS)}
-          icon={Target}
-          accentColor="#ef4444"
-          trend={-3}
-          trendLabel="surcharge"
-        />
+        <KPICard label="Coffre Total" value={formatMoney(vaultTotal)} icon={Wallet} accentColor="#B4005D" trend={12} trendLabel="vs mois dernier" />
+        <KPICard label="Production Hebdo" value={formatMoney(weeklyProduction)} icon={TrendingUp} accentColor="#d4af37" trend={7} />
+        <KPICard label="Membres Actifs" value={String(activeMembers)} subValue={`/ ${members.length}`} icon={Users} accentColor="#22c55e" trend={0} />
+        <KPICard label="Missions Actives" value={String(activeMissions)} icon={Target} accentColor="#ef4444" trend={-3} trendLabel="surcharge" />
       </section>
 
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-4">
-        <div className="xl:col-span-2">
-          <TopMembersChart />
-        </div>
+        <div className="xl:col-span-2"><TopMembersChart /></div>
         <AlertsPanel />
       </section>
 
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-4">
-        <div className="xl:col-span-2">
-          <ActivityFeed />
-        </div>
+        <div className="xl:col-span-2"><ActivityFeed /></div>
         <div className="gang-card p-5">
-          <h3 className="font-display font-bold text-sm tracking-widest uppercase text-ink-primary mb-4">
-            Top Membres
-          </h3>
+          <h3 className="font-display font-bold text-sm tracking-widest uppercase text-ink-primary mb-4">Top Membres</h3>
           <div className="space-y-3">
             {topMembers.map((member, i) => (
               <MemberCard
                 key={member.id}
                 member={member}
-                mission={MISSIONS.find((m) => m.id === member.missionId) ?? null}
+                mission={missions.find((m) => m.id === member.missionId) ?? null}
                 onClick={() => setSelectedMember(member)}
                 delay={i * 80}
               />
@@ -208,7 +211,7 @@ function DashboardPage() {
       {selectedMember && (
         <MemberModal
           member={selectedMember}
-          mission={MISSIONS.find((m) => m.id === selectedMember.missionId) ?? null}
+          mission={missions.find((m) => m.id === selectedMember.missionId) ?? null}
           onClose={() => setSelectedMember(null)}
         />
       )}
@@ -216,8 +219,14 @@ function DashboardPage() {
   );
 }
 
+// ── Members page ──────────────────────────────────────────────────────────────
+
 function MembersPage() {
+  const { members, missions, loading, error, refetch } = useData();
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
+
+  if (loading) return <LoadingScreen />;
+  if (error) return <ErrorScreen message={error} onRetry={refetch} />;
 
   return (
     <>
@@ -228,21 +237,19 @@ function MembersPage() {
         </p>
       </section>
 
-      <OperationsPlanner members={MEMBERS} />
+      <OperationsPlanner members={members} />
 
       <section className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
-        {MEMBERS.length === 0 && (
+        {members.length === 0 && (
           <div className="gang-card p-5 md:col-span-2 2xl:col-span-3">
-            <p className="text-sm text-ink-secondary">
-              Aucun membre a afficher pour le moment.
-            </p>
+            <p className="text-sm text-ink-secondary">Aucun membre à afficher.</p>
           </div>
         )}
-        {MEMBERS.map((member, i) => (
+        {members.map((member, i) => (
           <MemberCard
             key={member.id}
             member={member}
-            mission={MISSIONS.find((m) => m.id === member.missionId) ?? null}
+            mission={missions.find((m) => m.id === member.missionId) ?? null}
             onClick={() => setSelectedMember(member)}
             delay={i * 50}
           />
@@ -252,7 +259,7 @@ function MembersPage() {
       {selectedMember && (
         <MemberModal
           member={selectedMember}
-          mission={MISSIONS.find((m) => m.id === selectedMember.missionId) ?? null}
+          mission={missions.find((m) => m.id === selectedMember.missionId) ?? null}
           onClose={() => setSelectedMember(null)}
         />
       )}
@@ -260,28 +267,29 @@ function MembersPage() {
   );
 }
 
+// ── Treasury page ─────────────────────────────────────────────────────────────
+
 function TreasuryPage() {
-  const lastTen = [...TRANSACTIONS]
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 10);
+  const { members, transactions, loading, error, refetch } = useData();
+
+  const totalPropre = useMemo(
+    () => transactions.filter((t) => t.type === 'PROPRE').reduce((s, t) => s + t.amount, 0),
+    [transactions],
+  );
+  const totalSale = useMemo(
+    () => transactions.filter((t) => t.type === 'SALE').reduce((s, t) => s + t.amount, 0),
+    [transactions],
+  );
+  const lastTen = useMemo(() => transactions.slice(0, 10), [transactions]);
+
+  if (loading) return <LoadingScreen />;
+  if (error) return <ErrorScreen message={error} onRetry={refetch} />;
 
   return (
     <>
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        <KPICard
-          label="Flux Propre"
-          value={formatMoney(TOTAL_PROPRE)}
-          icon={Wallet}
-          accentColor="#22c55e"
-          trend={9}
-        />
-        <KPICard
-          label="Flux Sale"
-          value={formatMoney(TOTAL_SALE)}
-          icon={TrendingUp}
-          accentColor="#ef4444"
-          trend={5}
-        />
+        <KPICard label="Flux Propre" value={formatMoney(totalPropre)} icon={Wallet} accentColor="#22c55e" trend={9} />
+        <KPICard label="Flux Sale" value={formatMoney(totalSale)} icon={TrendingUp} accentColor="#ef4444" trend={5} />
       </section>
 
       <section className="gang-card p-5 overflow-x-auto">
@@ -303,8 +311,13 @@ function TreasuryPage() {
             </tr>
           </thead>
           <tbody>
+            {lastTen.length === 0 && (
+              <tr>
+                <td className="py-3 text-ink-secondary text-sm" colSpan={5}>Aucune transaction.</td>
+              </tr>
+            )}
             {lastTen.map((tx) => {
-              const member = MEMBERS.find((m) => m.id === tx.memberId);
+              const member = members.find((m) => m.id === tx.memberId);
               return (
                 <tr key={tx.id} className="table-row-hover border-b border-ink-border/70">
                   <td className="py-2.5 text-ink-secondary font-mono">{formatDateTime(tx.date)}</td>
@@ -337,17 +350,16 @@ function TreasuryPage() {
   );
 }
 
+// ── Layout ────────────────────────────────────────────────────────────────────
+
 function AuthenticatedLayout() {
   const { user } = useAuth();
 
-  if (!user) {
-    return <Navigate to="/login" replace />;
-  }
+  if (!user) return <Navigate to="/login" replace />;
 
   return (
     <div className="h-full bg-bg-base flex overflow-hidden noise-bg scanlines">
       <Sidebar />
-
       <main className="flex-1 min-w-0 overflow-y-auto p-4 md:p-6 relative z-10">
         <header className="mb-4 gang-card p-4">
           <p className="text-xs uppercase tracking-[0.24em] text-ink-secondary font-display">
@@ -383,14 +395,8 @@ function AppShell() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route
-          path="/login"
-          element={user ? <Navigate to="/dashboard" replace /> : <LoginPage />}
-        />
-        <Route
-          path="/auth/discord/callback"
-          element={user ? <Navigate to="/dashboard" replace /> : <DiscordCallbackPage />}
-        />
+        <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
+        <Route path="/auth/discord/callback" element={user ? <Navigate to="/dashboard" replace /> : <DiscordCallbackPage />} />
         <Route path="/*" element={<AuthenticatedLayout />} />
       </Routes>
     </BrowserRouter>
@@ -400,7 +406,9 @@ function AppShell() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppShell />
+      <DataProvider>
+        <AppShell />
+      </DataProvider>
     </AuthProvider>
   );
 }

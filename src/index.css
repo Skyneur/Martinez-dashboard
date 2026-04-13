@@ -112,6 +112,11 @@ body {
 .stagger-children > *:nth-child(8) { animation-delay: 560ms; }
 
 /* Animated entry for cards */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 .animate-entry {
   opacity: 0;
   animation: fadeInUp 0.5s ease forwards;
