@@ -1,29 +1,29 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ClipboardCheck, Coins, Save, CheckCircle2, Check, X, RefreshCw, ChevronDown } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Gauge, Save, CheckCircle2, Check, X, RefreshCw, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import {
+  getSpeedoLogs,
   getMissionReports,
   addMissionReport,
   reviewMissionReport,
-  getMoneyReports,
-  addMoneyReport,
-  reviewMoneyReport,
+  type SpeedoLogRow,
   type MissionReportRow,
-  type MoneyReportRow,
 } from '../lib/db';
-import { formatMoney } from '../utils/format';
 
-type ReportScreen = 'mission' | 'money';
+const WEEKLY_QUOTA = 3.5;
+
+const SPEEDO_ACTIVITIES = ['Farm Acide', 'Farm Weed'];
+
 type ReviewStatus = 'pending' | 'approved' | 'rejected';
 
-const statusLabel = (status: ReviewStatus | string): string => {
-  if (status === 'approved') return 'ACCEPTE';
-  if (status === 'rejected') return 'REFUSE';
+const statusLabel = (status: string): string => {
+  if (status === 'approved') return 'ACCEPTÉ';
+  if (status === 'rejected') return 'REFUSÉ';
   return 'EN ATTENTE';
 };
 
-const statusStyle = (status: ReviewStatus | string) => {
+const statusStyle = (status: string) => {
   if (status === 'approved') return { background: 'rgba(34,197,94,0.12)', color: '#22c55e' };
   if (status === 'rejected') return { background: 'rgba(239,68,68,0.12)', color: '#ef4444' };
   return { background: 'rgba(212,175,55,0.12)', color: '#d4af37' };
@@ -39,94 +39,35 @@ const toDataUrl = (file: File): Promise<string> =>
 
 const nowIso = () => new Date().toISOString();
 
-const MISSION_OPTIONS = [
-  'Farm Acide',
-  'Farm Weed',
-  'ATM',
-];
+/** Returns ISO dates Mon…Sun for the current week */
+function currentWeekDates(): string[] {
+  const today = new Date();
+  const day = today.getDay();
+  const diff = (day + 6) % 7;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - diff);
+  monday.setHours(0, 0, 0, 0);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+}
 
-function MissionCombobox({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  const filtered = value.trim()
-    ? MISSION_OPTIONS.filter((o) =>
-        o.toLowerCase().includes(value.toLowerCase()),
-      )
-    : MISSION_OPTIONS;
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
+function QuotaBar({ value, max = WEEKLY_QUOTA }: { value: number; max?: number }) {
+  const pct = Math.min(100, Math.round((value / max) * 100));
+  const color = value >= max ? '#22c55e' : value >= max * 0.5 ? '#f59e0b' : '#ef4444';
   return (
-    <div ref={ref} className="relative">
-      <div className="relative">
-        <input
-          className="gang-input w-full pr-8"
-          type="text"
-          value={value}
-          onChange={(e) => { onChange(e.target.value); setOpen(true); }}
-          onFocus={() => setOpen(true)}
-          placeholder="Sélectionner ou saisir une mission…"
-          autoComplete="off"
+    <div className="flex items-center gap-3">
+      <div className="flex-1 h-2 rounded-full bg-bg-hover overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-500"
+          style={{ width: `${pct}%`, background: color }}
         />
-        <button
-          type="button"
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-secondary hover:text-ink-primary transition-colors"
-          onClick={() => setOpen((o) => !o)}
-          tabIndex={-1}
-        >
-          <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-        </button>
       </div>
-
-      {open && (
-        <ul
-          className="absolute z-50 w-full mt-1 rounded overflow-hidden"
-          style={{
-            background: '#1a1a28',
-            border: '1px solid #2a2a3e',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-            maxHeight: 220,
-            overflowY: 'auto',
-          }}
-        >
-          {filtered.length === 0 && (
-            <li className="px-3 py-2 text-xs text-ink-secondary italic">Valeur personnalisée</li>
-          )}
-          {filtered.map((option) => (
-            <li
-              key={option}
-              className="px-3 py-2 text-sm cursor-pointer transition-colors"
-              style={{ color: value === option ? '#c41e3a' : '#c8c8d8' }}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                onChange(option);
-                setOpen(false);
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLElement).style.background = 'rgba(196,30,58,0.08)';
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.background = 'transparent';
-              }}
-            >
-              {option}
-            </li>
-          ))}
-        </ul>
-      )}
+      <span className="text-sm font-mono font-bold flex-shrink-0" style={{ color }}>
+        {value.toFixed(1)}<span className="text-ink-secondary font-normal">/{max}</span>
+      </span>
     </div>
   );
 }
@@ -134,36 +75,28 @@ function MissionCombobox({
 export default function SelfReportsPage() {
   const { user } = useAuth();
   const { members } = useData();
-  const [activeScreen, setActiveScreen] = useState<ReportScreen>('mission');
-  const [adminView, setAdminView] = useState<ReportScreen>('mission');
 
-  // Mission form
-  const [missionLabel, setMissionLabel] = useState('');
-  const [missionDetails, setMissionDetails] = useState('');
-  const [missionProofFile, setMissionProofFile] = useState<File | null>(null);
-  const [missionReceipt, setMissionReceipt] = useState<MissionReportRow | null>(null);
-  const [missionReviewNotes, setMissionReviewNotes] = useState<Record<string, string>>({});
+  // Form state
+  const [activity, setActivity] = useState(SPEEDO_ACTIVITIES[0]);
+  const [amount, setAmount] = useState('');
+  const [notes, setNotes] = useState('');
+  const [proofFile, setProofFile] = useState<File | null>(null);
+  const [receipt, setReceipt] = useState<MissionReportRow | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  // Money form
-  const [moneyAmount, setMoneyAmount] = useState('');
-  const [moneySource, setMoneySource] = useState('');
-  const [moneyNotes, setMoneyNotes] = useState('');
-  const [moneyProofFile, setMoneyProofFile] = useState<File | null>(null);
-  const [moneyReceipt, setMoneyReceipt] = useState<MoneyReportRow | null>(null);
-  const [moneyReviewNotes, setMoneyReviewNotes] = useState<Record<string, string>>({});
+  // Review notes state (per report id)
+  const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
 
   // Data
-  const [missionReports, setMissionReports] = useState<MissionReportRow[]>([]);
-  const [moneyReports, setMoneyReports] = useState<MoneyReportRow[]>([]);
-  const [loadingReports, setLoadingReports] = useState(true);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [reports, setReports] = useState<MissionReportRow[]>([]);
+  const [speedoLogs, setSpeedoLogs] = useState<SpeedoLogRow[]>([]);
+  const [loadingData, setLoadingData] = useState(true);
 
   const isReviewer = ['boss', 'oncle', 'segundo', 'capo'].includes(user?.role ?? '');
 
-  // Cherche par id (UUID) OU discordId (snowflake) pour compatibilité sessions anciennes
   const findMember = useCallback(
-    (uid: string) =>
-      members.find((m) => m.id === uid || m.discordId === uid) ?? null,
+    (uid: string) => members.find((m) => m.id === uid || m.discordId === uid) ?? null,
     [members],
   );
 
@@ -173,433 +106,368 @@ export default function SelfReportsPage() {
   );
 
   const memberName = (memberId: string): string =>
-    (members.find((m) => m.id === memberId || m.discordId === memberId)?.name) ?? 'Membre inconnu';
+    members.find((m) => m.id === memberId || m.discordId === memberId)?.name ?? 'Membre inconnu';
 
-  // ── Load reports ────────────────────────────────────────────────────────────
+  // ── Load data ────────────────────────────────────────────────────────────────
 
-  const loadReports = useCallback(async () => {
-    setLoadingReports(true);
+  const loadData = useCallback(async () => {
+    setLoadingData(true);
     try {
-      const [mr, mo] = await Promise.all([getMissionReports(), getMoneyReports()]);
-      setMissionReports(mr);
-      setMoneyReports(mo);
+      const [mr, sl] = await Promise.all([getMissionReports(), getSpeedoLogs()]);
+      setReports(mr);
+      setSpeedoLogs(sl);
     } catch {
       // silently fail — tables may not exist yet
     } finally {
-      setLoadingReports(false);
+      setLoadingData(false);
     }
   }, []);
 
-  useEffect(() => { void loadReports(); }, [loadReports]);
+  useEffect(() => { void loadData(); }, [loadData]);
+
+  // ── Current week progress ────────────────────────────────────────────────────
+
+  const weekDates = useMemo(() => currentWeekDates(), []);
+
+  const myWeeklyTotal = useMemo(() => {
+    const memberId = currentMember?.id ?? user?.id;
+    if (!memberId) return 0;
+    return speedoLogs
+      .filter((l) => l.member_id === memberId && weekDates.includes(l.date) && l.amount > 0)
+      .reduce((s, l) => s + l.amount, 0);
+  }, [speedoLogs, currentMember, user, weekDates]);
+
+  const pendingCount = useMemo(() => {
+    const memberId = currentMember?.id ?? user?.id;
+    if (!memberId) return 0;
+    return reports.filter(
+      (r) => (r.member_id === memberId) && r.status === 'pending',
+    ).length;
+  }, [reports, currentMember, user]);
 
   // ── Submit ──────────────────────────────────────────────────────────────────
 
-  const submitMission = async () => {
+  const handleSubmit = async () => {
     if (!user) return;
-    const label = missionLabel.trim();
-    if (!label) return;
+    const num = parseFloat(amount);
+    if (isNaN(num) || num <= 0) return;
     setSubmitError(null);
+    setSubmitting(true);
 
     const memberId = currentMember?.id ?? user.id;
 
     try {
-      const proof_data = missionProofFile ? await toDataUrl(missionProofFile) : null;
+      const proof_data = proofFile ? await toDataUrl(proofFile) : null;
+      const notesTrimmed = notes.trim();
       const report = {
         member_id: memberId,
-        mission_label: label,
-        details: missionDetails.trim(),
+        mission_label: activity,
+        details: notesTrimmed ? `${num}|${notesTrimmed}` : String(num),
         completed_at: nowIso(),
         proof_data,
         status: 'pending',
       };
       await addMissionReport(report);
-      await loadReports();
+      await loadData();
 
-      const inserted = missionReports[0]; // will be refreshed above
-      setMissionReceipt({ ...report, id: crypto.randomUUID(), reviewed_by: null, reviewed_at: null, review_note: '' });
-      setMissionLabel('');
-      setMissionDetails('');
-      setMissionProofFile(null);
+      setReceipt({ ...report, id: crypto.randomUUID(), reviewed_by: null, reviewed_at: null, review_note: '' });
+      setAmount('');
+      setNotes('');
+      setProofFile(null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setSubmitError(`Erreur mission : ${msg}`);
-      console.error('[SelfReports] submitMission:', err);
-    }
-  };
-
-  const submitMoney = async () => {
-    if (!user) return;
-    const amount = Number(moneyAmount);
-    if (Number.isNaN(amount) || amount <= 0) return;
-    setSubmitError(null);
-
-    const memberId = currentMember?.id ?? user.id;
-
-    try {
-      const proof_data = moneyProofFile ? await toDataUrl(moneyProofFile) : null;
-      const report = {
-        member_id: memberId,
-        amount,
-        source: moneySource.trim(),
-        notes: moneyNotes.trim(),
-        submitted_at: nowIso(),
-        proof_data,
-        status: 'pending',
-      };
-      await addMoneyReport(report);
-      await loadReports();
-
-      setMoneyReceipt({ ...report, id: crypto.randomUUID(), reviewed_by: null, reviewed_at: null, review_note: '' });
-      setMoneyAmount('');
-      setMoneySource('');
-      setMoneyNotes('');
-      setMoneyProofFile(null);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setSubmitError(`Erreur argent : ${msg}`);
-      console.error('[SelfReports] submitMoney:', err);
+      setSubmitError(`Erreur : ${msg}`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   // ── Review ──────────────────────────────────────────────────────────────────
 
-  const reviewMission = async (id: string, status: Exclude<ReviewStatus, 'pending'>) => {
+  const handleReview = async (id: string, status: Exclude<ReviewStatus, 'pending'>) => {
     if (!user || !isReviewer) return;
-    const note = (missionReviewNotes[id] ?? '').trim();
+    const note = (reviewNotes[id] ?? '').trim();
     await reviewMissionReport(id, status, user.id, note);
-    await loadReports();
-  };
-
-  const reviewMoney = async (id: string, status: Exclude<ReviewStatus, 'pending'>) => {
-    if (!user || !isReviewer) return;
-    const note = (moneyReviewNotes[id] ?? '').trim();
-    await reviewMoneyReport(id, status, user.id, note);
-    await loadReports();
+    await loadData();
   };
 
   // ── Visibility ──────────────────────────────────────────────────────────────
 
-  const visibleMissionReports = isReviewer
-    ? missionReports
-    : missionReports.filter((r) => r.member_id === user?.id);
-
-  const visibleMoneyReports = isReviewer
-    ? moneyReports
-    : moneyReports.filter((r) => r.member_id === user?.id);
+  const visibleReports = isReviewer
+    ? reports
+    : reports.filter((r) => r.member_id === (currentMember?.id ?? user?.id));
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <>
-      <section className="gang-card p-5 mb-4">
-        <h2 className="font-display font-bold text-lg text-ink-primary">Déclarations Membres</h2>
-        <p className="text-sm text-ink-secondary mt-1">
-          Chaque membre déclare ici ses missions réalisées et les montants apportés.
-        </p>
-        <p className="text-xs text-ink-secondary mt-2 font-mono">
-          Connecté en tant que: {currentMember?.name ?? user?.name ?? 'Inconnu'}
-        </p>
-      </section>
+    <div className="space-y-4">
 
-      <section className="gang-card p-5 mb-4">
-        <div className="flex flex-wrap gap-2 mb-4">
-          {(['mission', 'money'] as const).map((screen) => (
-            <button
-              key={screen}
-              className={`px-3 py-2 rounded text-sm font-display tracking-wider uppercase border transition-colors ${
-                activeScreen === screen
-                  ? 'text-ink-primary border-gang-crimson bg-gang-crimson/10'
-                  : 'text-ink-secondary border-ink-border hover:text-ink-primary'
-              }`}
-              onClick={() => setActiveScreen(screen)}
-            >
-              {screen === 'mission' ? 'Ecran Mission' : 'Ecran Argent'}
-            </button>
-          ))}
+      {/* ── Header ── */}
+      <div className="gang-card p-5">
+        <div className="flex items-center gap-3 mb-1">
+          <Gauge size={18} style={{ color: '#c41e3a' }} />
+          <h2 className="font-display font-bold text-lg text-ink-primary">Déclarations Speedos</h2>
         </div>
+        <p className="text-sm text-ink-secondary">
+          Déclare tes sessions ici. Un boss validera chaque soumission.
+        </p>
+        <p className="text-xs text-ink-secondary mt-1.5 font-mono">
+          Connecté : <span className="text-ink-primary">{currentMember?.name ?? user?.name ?? 'Inconnu'}</span>
+        </p>
+      </div>
+
+      {/* ── My weekly progress ── */}
+      <div className="gang-card p-5">
+        <p className="text-xs font-display font-bold tracking-widest uppercase text-ink-secondary mb-3">
+          Ma semaine en cours
+        </p>
+        <QuotaBar value={myWeeklyTotal} />
+        <div className="flex items-center justify-between mt-3">
+          <p className="text-xs text-ink-secondary">
+            Objectif : <span className="text-ink-primary font-mono font-bold">3,5 speedos / semaine</span>
+          </p>
+          {pendingCount > 0 && (
+            <span
+              className="flex items-center gap-1 text-xs font-display font-semibold px-2 py-0.5 rounded"
+              style={{ background: 'rgba(212,175,55,0.12)', color: '#d4af37' }}
+            >
+              <AlertTriangle size={10} />
+              {pendingCount} déclaration{pendingCount > 1 ? 's' : ''} en attente
+            </span>
+          )}
+        </div>
+        {myWeeklyTotal >= WEEKLY_QUOTA && (
+          <p className="text-xs mt-2 font-display font-semibold" style={{ color: '#22c55e' }}>
+            Quota atteint cette semaine
+          </p>
+        )}
+      </div>
+
+      {/* ── Declaration form ── */}
+      <div className="gang-card p-5">
+        <p className="text-xs font-display font-bold tracking-widest uppercase text-ink-secondary mb-4">
+          Nouvelle déclaration
+        </p>
 
         {submitError && (
           <p className="mb-3 text-xs text-red-400 font-mono">{submitError}</p>
         )}
 
-        {activeScreen === 'mission' ? (
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <ClipboardCheck size={14} style={{ color: '#B4005D' }} />
-              <h3 className="font-display font-bold text-sm tracking-widest uppercase text-ink-primary">
-                Déclarer une mission réalisée
-              </h3>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <MissionCombobox value={missionLabel} onChange={setMissionLabel} />
-              <input
-                className="gang-input"
-                type="text"
-                value={currentMember?.name ?? user?.name ?? ''}
-                disabled
-              />
-            </div>
-
-            <textarea
-              className="gang-input mt-3 w-full min-h-[100px]"
-              value={missionDetails}
-              onChange={(e) => setMissionDetails(e.target.value)}
-              placeholder="Détails: zone, durée, résultat, problème rencontré..."
-            />
-
-            <div className="mt-3">
-              <label className="text-xs text-ink-secondary uppercase tracking-widest font-display">Preuve (capture)</label>
-              <input
-                className="gang-input mt-1 w-full"
-                type="file"
-                accept="image/*"
-                onChange={(e) => setMissionProofFile(e.target.files?.[0] ?? null)}
-              />
-            </div>
-
-            <button className="btn-crimson mt-3 inline-flex items-center gap-2" onClick={() => void submitMission()}>
-              <Save size={13} />
-              Envoyer la déclaration mission
-            </button>
-
-            {missionReceipt && (
-              <div
-                className="mt-4 rounded p-4"
-                style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)' }}
+        <div className="space-y-3">
+          {/* Activity + Amount */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-ink-secondary uppercase tracking-widest font-display block mb-1">
+                Activité
+              </label>
+              <select
+                className="gang-input w-full"
+                value={activity}
+                onChange={(e) => setActivity(e.target.value)}
               >
-                <div className="flex items-center gap-2 mb-2">
-                  <CheckCircle2 size={14} style={{ color: '#22c55e' }} />
-                  <p className="text-sm text-ink-primary font-medium">Accusé de réception mission</p>
-                </div>
-                <p className="text-xs text-ink-secondary font-mono">Mission: {missionReceipt.mission_label}</p>
-                <p className="text-xs text-ink-secondary font-mono mt-1">
-                  Horodatage: {new Date(missionReceipt.completed_at).toLocaleString('fr-FR')}
-                </p>
-                {missionReceipt.proof_data && (
-                  <img
-                    src={missionReceipt.proof_data}
-                    alt="Preuve mission"
-                    className="mt-3 max-h-48 w-auto rounded border border-ink-border"
-                  />
-                )}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Coins size={14} style={{ color: '#22c55e' }} />
-              <h3 className="font-display font-bold text-sm tracking-widest uppercase text-ink-primary">
-                Déclarer un apport d'argent
-              </h3>
+                {SPEEDO_ACTIVITIES.map((a) => (
+                  <option key={a} value={a}>{a}</option>
+                ))}
+              </select>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="text-xs text-ink-secondary uppercase tracking-widest font-display block mb-1">
+                Nombre de speedos
+              </label>
               <input
-                className="gang-input"
+                className="gang-input w-full"
                 type="number"
-                min={0}
-                value={moneyAmount}
-                onChange={(e) => setMoneyAmount(e.target.value)}
-                placeholder="Montant"
-              />
-              <input
-                className="gang-input md:col-span-2"
-                type="text"
-                value={moneySource}
-                onChange={(e) => setMoneySource(e.target.value)}
-                placeholder="Source: ATM / Conteneur / Vente / Mission"
+                min={0.5}
+                step={0.5}
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="ex: 1.5"
               />
             </div>
-
-            <textarea
-              className="gang-input mt-3 w-full min-h-[100px]"
-              value={moneyNotes}
-              onChange={(e) => setMoneyNotes(e.target.value)}
-              placeholder="Détails: preuve, contexte, qui était présent..."
-            />
-
-            <div className="mt-3">
-              <label className="text-xs text-ink-secondary uppercase tracking-widest font-display">Preuve (capture)</label>
-              <input
-                className="gang-input mt-1 w-full"
-                type="file"
-                accept="image/*"
-                onChange={(e) => setMoneyProofFile(e.target.files?.[0] ?? null)}
-              />
-            </div>
-
-            <button className="btn-crimson mt-3 inline-flex items-center gap-2" onClick={() => void submitMoney()}>
-              <Save size={13} />
-              Envoyer la déclaration argent
-            </button>
-
-            {moneyReceipt && (
-              <div
-                className="mt-4 rounded p-4"
-                style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)' }}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <CheckCircle2 size={14} style={{ color: '#22c55e' }} />
-                  <p className="text-sm text-ink-primary font-medium">Accusé de réception argent</p>
-                </div>
-                <p className="text-xs text-ink-secondary font-mono">Montant: {formatMoney(moneyReceipt.amount)}</p>
-                <p className="text-xs text-ink-secondary font-mono mt-1">
-                  Horodatage: {new Date(moneyReceipt.submitted_at).toLocaleString('fr-FR')}
-                </p>
-                {moneyReceipt.proof_data && (
-                  <img
-                    src={moneyReceipt.proof_data}
-                    alt="Preuve argent"
-                    className="mt-3 max-h-48 w-auto rounded border border-ink-border"
-                  />
-                )}
-              </div>
-            )}
           </div>
-        )}
-      </section>
 
-      <section className="gang-card p-5 mb-4">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-display font-bold text-sm tracking-widest uppercase text-ink-primary">
-            Historique des déclarations
-          </h3>
+          {/* Notes */}
+          <div>
+            <label className="text-xs text-ink-secondary uppercase tracking-widest font-display block mb-1">
+              Notes (optionnel)
+            </label>
+            <input
+              className="gang-input w-full"
+              type="text"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Zone, durée, remarque..."
+            />
+          </div>
+
+          {/* Proof */}
+          <div>
+            <label className="text-xs text-ink-secondary uppercase tracking-widest font-display block mb-1">
+              Capture d'écran (preuve)
+            </label>
+            <input
+              className="gang-input w-full"
+              type="file"
+              accept="image/*"
+              onChange={(e) => setProofFile(e.target.files?.[0] ?? null)}
+            />
+          </div>
+
           <button
-            className="text-ink-secondary hover:text-ink-primary transition-colors p-1"
-            onClick={() => void loadReports()}
-            title="Rafraîchir"
+            className="btn-crimson inline-flex items-center gap-2"
+            onClick={() => void handleSubmit()}
+            disabled={submitting || !amount || parseFloat(amount) <= 0}
           >
-            <RefreshCw size={14} className={loadingReports ? 'animate-spin' : ''} />
+            <Save size={13} />
+            {submitting ? 'Envoi...' : 'Envoyer la déclaration'}
           </button>
         </div>
 
-        <div className="flex flex-wrap gap-2 mb-4">
-          {(['mission', 'money'] as const).map((screen) => (
-            <button
-              key={screen}
-              className={`px-3 py-2 rounded text-sm font-display tracking-wider uppercase border transition-colors ${
-                adminView === screen
-                  ? 'text-ink-primary border-gang-crimson bg-gang-crimson/10'
-                  : 'text-ink-secondary border-ink-border hover:text-ink-primary'
-              }`}
-              onClick={() => setAdminView(screen)}
-            >
-              {screen === 'mission' ? 'Historique Missions' : 'Historique Argent'}
-            </button>
-          ))}
-        </div>
-
-        {adminView === 'mission' ? (
-          <div className="space-y-3">
-            {visibleMissionReports.length === 0 && (
-              <p className="text-sm text-ink-secondary">Aucune déclaration mission.</p>
+        {/* Receipt */}
+        {receipt && (
+          <div
+            className="mt-4 rounded p-4"
+            style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)' }}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <CheckCircle2 size={14} style={{ color: '#22c55e' }} />
+              <p className="text-sm text-ink-primary font-medium">Déclaration envoyée</p>
+            </div>
+            <p className="text-xs text-ink-secondary font-mono">
+              {receipt.mission_label} · <span className="text-ink-primary font-bold">{receipt.details} speedo(s)</span>
+            </p>
+            <p className="text-xs text-ink-secondary font-mono mt-1">
+              {new Date(receipt.completed_at).toLocaleString('fr-FR')}
+            </p>
+            {receipt.proof_data && (
+              <img
+                src={receipt.proof_data}
+                alt="Preuve"
+                className="mt-3 max-h-48 w-auto rounded border border-ink-border"
+              />
             )}
-            {visibleMissionReports.map((item) => (
-              <div key={item.id} className="rounded border border-ink-border p-3 bg-bg-elevated/40">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                  <p className="text-sm text-ink-primary font-medium">
-                    {memberName(item.member_id)} · {item.mission_label}
-                  </p>
-                  <span className="text-xs font-mono px-2 py-1 rounded" style={statusStyle(item.status)}>
-                    {statusLabel(item.status)}
-                  </span>
-                </div>
-                <p className="text-xs text-ink-secondary">{item.details || 'Sans détails'}</p>
-                <p className="text-xs text-ink-secondary font-mono mt-2">
-                  Soumis le {new Date(item.completed_at).toLocaleString('fr-FR')}
-                </p>
-                {item.proof_data && (
-                  <img src={item.proof_data} alt="Preuve mission" className="mt-3 max-h-48 w-auto rounded border border-ink-border" />
-                )}
-
-                {isReviewer && item.status === 'pending' && (
-                  <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <input
-                      className="gang-input md:col-span-3"
-                      type="text"
-                      placeholder="Note de validation (optionnel)"
-                      value={missionReviewNotes[item.id] ?? ''}
-                      onChange={(e) =>
-                        setMissionReviewNotes((prev) => ({ ...prev, [item.id]: e.target.value }))
-                      }
-                    />
-                    <button
-                      className="btn-crimson inline-flex items-center justify-center gap-2"
-                      onClick={() => void reviewMission(item.id, 'approved')}
-                    >
-                      <Check size={13} />
-                      Accepter
-                    </button>
-                    <button
-                      className="btn-ghost inline-flex items-center justify-center gap-2"
-                      onClick={() => void reviewMission(item.id, 'rejected')}
-                    >
-                      <X size={13} />
-                      Refuser
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {visibleMoneyReports.length === 0 && (
-              <p className="text-sm text-ink-secondary">Aucune déclaration argent.</p>
-            )}
-            {visibleMoneyReports.map((item) => (
-              <div key={item.id} className="rounded border border-ink-border p-3 bg-bg-elevated/40">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                  <p className="text-sm text-ink-primary font-medium">
-                    {memberName(item.member_id)} · {formatMoney(item.amount)}
-                  </p>
-                  <span className="text-xs font-mono px-2 py-1 rounded" style={statusStyle(item.status)}>
-                    {statusLabel(item.status)}
-                  </span>
-                </div>
-                <p className="text-xs text-ink-secondary">Source: {item.source || 'Non précisée'}</p>
-                <p className="text-xs text-ink-secondary mt-1">{item.notes || 'Sans détails'}</p>
-                <p className="text-xs text-ink-secondary font-mono mt-2">
-                  Soumis le {new Date(item.submitted_at).toLocaleString('fr-FR')}
-                </p>
-                {item.proof_data && (
-                  <img src={item.proof_data} alt="Preuve argent" className="mt-3 max-h-48 w-auto rounded border border-ink-border" />
-                )}
-
-                {isReviewer && item.status === 'pending' && (
-                  <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <input
-                      className="gang-input md:col-span-3"
-                      type="text"
-                      placeholder="Note de validation (optionnel)"
-                      value={moneyReviewNotes[item.id] ?? ''}
-                      onChange={(e) =>
-                        setMoneyReviewNotes((prev) => ({ ...prev, [item.id]: e.target.value }))
-                      }
-                    />
-                    <button
-                      className="btn-crimson inline-flex items-center justify-center gap-2"
-                      onClick={() => void reviewMoney(item.id, 'approved')}
-                    >
-                      <Check size={13} />
-                      Accepter
-                    </button>
-                    <button
-                      className="btn-ghost inline-flex items-center justify-center gap-2"
-                      onClick={() => void reviewMoney(item.id, 'rejected')}
-                    >
-                      <X size={13} />
-                      Refuser
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
           </div>
         )}
-      </section>
-    </>
+      </div>
+
+      {/* ── History / review ── */}
+      <div className="gang-card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-xs font-display font-bold tracking-widest uppercase text-ink-secondary">
+            {isReviewer ? 'Toutes les déclarations' : 'Mes déclarations'}
+          </p>
+          <button
+            className="text-ink-secondary hover:text-ink-primary transition-colors p-1"
+            onClick={() => void loadData()}
+            title="Rafraîchir"
+          >
+            <RefreshCw size={14} className={loadingData ? 'animate-spin' : ''} />
+          </button>
+        </div>
+
+        {loadingData ? (
+          <div className="flex items-center justify-center py-8">
+            <div
+              className="w-6 h-6 rounded-full animate-spin"
+              style={{ border: '2px solid rgba(196,30,58,0.2)', borderTopColor: '#c41e3a' }}
+            />
+          </div>
+        ) : visibleReports.length === 0 ? (
+          <p className="text-sm text-ink-secondary italic">Aucune déclaration.</p>
+        ) : (
+          <div className="space-y-3">
+            {visibleReports.map((item) => {
+              const [rawAmount, rawNote] = item.details.split('|');
+              const speedoAmount = parseFloat(rawAmount);
+              const hasAmount = !isNaN(speedoAmount);
+              const detailNote = rawNote?.trim() || null;
+              return (
+                <div
+                  key={item.id}
+                  className="rounded border border-ink-border p-3"
+                  style={{ background: 'rgba(30,30,46,0.4)' }}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <div>
+                      <p className="text-sm text-ink-primary font-medium">
+                        {isReviewer && (
+                          <span className="text-ink-secondary mr-1">{memberName(item.member_id)} ·</span>
+                        )}
+                        {item.mission_label}
+                        {hasAmount && (
+                          <span className="ml-2 font-mono font-bold" style={{ color: '#c41e3a' }}>
+                            +{speedoAmount}
+                          </span>
+                        )}
+                        {hasAmount && (
+                          <span className="ml-1 text-xs text-ink-secondary">speedo{speedoAmount > 1 ? 's' : ''}</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-ink-secondary font-mono mt-0.5">
+                        {new Date(item.completed_at).toLocaleString('fr-FR')}
+                      </p>
+                    </div>
+                    <span
+                      className="text-xs font-mono font-bold px-2 py-0.5 rounded"
+                      style={statusStyle(item.status)}
+                    >
+                      {statusLabel(item.status)}
+                    </span>
+                  </div>
+
+                  {detailNote && (
+                    <p className="text-xs text-ink-secondary mt-1 font-mono">{detailNote}</p>
+                  )}
+
+                  {item.review_note && item.status !== 'pending' && (
+                    <p className="text-xs text-ink-secondary italic mt-1">
+                      Note boss : {item.review_note}
+                    </p>
+                  )}
+
+                  {item.proof_data && (
+                    <img
+                      src={item.proof_data}
+                      alt="Preuve"
+                      className="mt-2 max-h-40 w-auto rounded border border-ink-border"
+                    />
+                  )}
+
+                  {isReviewer && item.status === 'pending' && (
+                    <div className="mt-3 space-y-2">
+                      <input
+                        className="gang-input w-full"
+                        type="text"
+                        placeholder="Note de validation (optionnel)"
+                        value={reviewNotes[item.id] ?? ''}
+                        onChange={(e) =>
+                          setReviewNotes((prev) => ({ ...prev, [item.id]: e.target.value }))
+                        }
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          className="btn-crimson inline-flex items-center gap-1.5 text-xs"
+                          onClick={() => void handleReview(item.id, 'approved')}
+                        >
+                          <Check size={12} />
+                          Accepter
+                        </button>
+                        <button
+                          className="btn-ghost inline-flex items-center gap-1.5 text-xs"
+                          onClick={() => void handleReview(item.id, 'rejected')}
+                        >
+                          <X size={12} />
+                          Refuser
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

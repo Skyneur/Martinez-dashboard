@@ -1,15 +1,16 @@
-import { Clock, Target, ChevronRight } from 'lucide-react';
-import type { Member, Mission } from '../types';
+import { Clock, TrendingUp, ShieldCheck, AlertTriangle } from 'lucide-react';
+import type { Member } from '../types';
 import { roleLabel, roleColor, roleBgColor, timeAgo, formatMoney } from '../utils/format';
 
 interface MemberCardProps {
   member: Member;
-  mission: Mission | null;
+  mission?: unknown;
+  warnCount?: number;
   onClick: () => void;
   delay?: number;
 }
 
-export default function MemberCard({ member, mission, onClick, delay = 0 }: MemberCardProps) {
+export default function MemberCard({ member, warnCount = 0, onClick, delay = 0 }: MemberCardProps) {
   const rColor = roleColor(member.role);
   const rBg = roleBgColor(member.role);
 
@@ -25,106 +26,115 @@ export default function MemberCard({ member, mission, onClick, delay = 0 }: Memb
         style={{ background: `radial-gradient(ellipse at top center, ${rColor}08, transparent 65%)` }}
       />
 
-      {/* Active dot */}
-      <div className="absolute top-4 right-4">
-        <div
-          className="w-2 h-2 rounded-full"
-          style={{
-            background: member.active ? '#22c55e' : '#ef4444',
-            boxShadow: member.active ? '0 0 6px #22c55e' : 'none',
-          }}
-        />
-      </div>
-
-      {/* Avatar + name */}
-      <div className="flex items-start gap-4 mb-4">
-        <div
-          className="w-12 h-12 rounded-full flex items-center justify-center text-base font-display font-black flex-shrink-0"
-          style={{
-            background: `linear-gradient(135deg, ${rColor}20, ${rColor}35)`,
-            border: `1.5px solid ${rColor}50`,
-            color: rColor,
-            boxShadow: `0 0 16px ${rColor}25`,
-          }}
+      {/* Warn badge */}
+      {warnCount > 0 && (
+        <div className="absolute top-3 right-3 flex items-center gap-1 px-1.5 py-0.5 rounded z-10"
+          style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.35)' }}
         >
-          {member.initials}
+          <AlertTriangle size={9} style={{ color: '#ef4444' }} />
+          <span className="text-[9px] font-display font-bold" style={{ color: '#ef4444' }}>{warnCount}</span>
         </div>
-        <div className="min-w-0 flex-1 pt-0.5">
-          <p className="font-display font-bold text-base text-ink-primary truncate pr-4">
+      )}
+
+      {/* Header: avatar + name + status */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="relative flex-shrink-0">
+          {member.discordAvatar ? (
+            <img
+              src={member.discordAvatar}
+              alt={member.name}
+              className="w-12 h-12 rounded-full object-cover"
+              style={{ border: `1.5px solid ${rColor}50`, boxShadow: `0 0 14px ${rColor}25` }}
+            />
+          ) : (
+            <div
+              className="w-12 h-12 rounded-full flex items-center justify-center text-base font-display font-black"
+              style={{
+                background: `linear-gradient(135deg, ${rColor}20, ${rColor}35)`,
+                border: `1.5px solid ${rColor}50`,
+                color: rColor,
+                boxShadow: `0 0 16px ${rColor}25`,
+              }}
+            >
+              {member.initials}
+            </div>
+          )}
+          {/* Active dot */}
+          <span
+            className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-bg-card"
+            style={{
+              background: member.active ? '#22c55e' : '#ef4444',
+              boxShadow: member.active ? '0 0 6px #22c55e88' : 'none',
+            }}
+          />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="font-display font-bold text-base text-ink-primary truncate leading-tight">
             {member.name}
           </p>
-          <span
-            className="role-badge mt-1 inline-block"
-            style={{ background: rBg, color: rColor, border: `1px solid ${rColor}30` }}
-          >
-            {roleLabel(member.role)}
-          </span>
+          <div className="flex items-center gap-2 mt-1">
+            <span
+              className="role-badge"
+              style={{ background: rBg, color: rColor, border: `1px solid ${rColor}30` }}
+            >
+              {roleLabel(member.role)}
+            </span>
+            <span className="text-xs text-ink-secondary/60 font-mono truncate">
+              {member.discordTag}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Mission block */}
-      <div
-        className="rounded p-3 mb-4"
-        style={{ background: 'rgba(30,30,46,0.5)', border: '1px solid rgba(42,42,62,0.6)' }}
-      >
-        {mission ? (
-          <>
-            <div className="flex items-center gap-2 mb-2">
-              <Target size={11} style={{ color: '#c41e3a' }} />
-              <span className="text-xs text-ink-secondary uppercase tracking-widest font-display font-semibold">
-                Mission active
-              </span>
-            </div>
-            <p className="text-xs text-ink-primary font-medium mb-3 truncate">{mission.description}</p>
-            {/* Progress bar */}
-            <div className="flex items-center gap-2">
-              <div className="flex-1 h-1 rounded-full" style={{ background: 'rgba(42,42,62,0.8)' }}>
-                <div
-                  className="h-full rounded-full progress-fill"
-                  style={{
-                    width: `${mission.progress}%`,
-                    background: mission.progress >= 75
-                      ? '#22c55e'
-                      : mission.progress >= 40
-                      ? '#d4af37'
-                      : '#c41e3a',
-                  }}
-                />
-              </div>
-              <span className="text-xs font-mono text-ink-secondary flex-shrink-0">
-                {mission.progress}%
-              </span>
-            </div>
-            <div className="flex items-center justify-between mt-1.5">
-              <span className="text-xs text-ink-secondary font-mono">
-                Objectif: {formatMoney(mission.target)}
-              </span>
-              <span
-                className="text-xs font-display font-semibold tracking-wider px-1.5 py-0.5 rounded-sm"
-                style={{ background: 'rgba(196,30,58,0.12)', color: '#c41e3a', fontSize: '9px' }}
-              >
-                {mission.type.toUpperCase()}
-              </span>
-            </div>
-          </>
-        ) : (
-          <div className="flex items-center gap-2 text-ink-secondary">
-            <Target size={11} />
-            <span className="text-xs">Aucune mission assignée</span>
-          </div>
-        )}
+      {/* Stats row */}
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        <div
+          className="rounded p-2 text-center"
+          style={{ background: 'rgba(30,30,46,0.5)', border: '1px solid rgba(42,42,62,0.6)' }}
+        >
+          <p className="text-xs text-ink-secondary leading-tight mb-0.5">Hebdo</p>
+          <p className="font-mono text-sm font-bold" style={{ color: '#d4af37' }}>
+            {formatMoney(member.weeklyEarned)}
+          </p>
+        </div>
+        <div
+          className="rounded p-2 text-center"
+          style={{ background: 'rgba(30,30,46,0.5)', border: '1px solid rgba(42,42,62,0.6)' }}
+        >
+          <p className="text-xs text-ink-secondary leading-tight mb-0.5">Total</p>
+          <p className="font-mono text-sm font-bold text-ink-primary">
+            {formatMoney(member.totalEarned)}
+          </p>
+        </div>
+        <div
+          className="rounded p-2 text-center"
+          style={{ background: 'rgba(30,30,46,0.5)', border: '1px solid rgba(42,42,62,0.6)' }}
+        >
+          <p className="text-xs text-ink-secondary leading-tight mb-0.5">Succès</p>
+          <p
+            className="font-mono text-sm font-bold"
+            style={{ color: member.successRate >= 70 ? '#22c55e' : member.successRate >= 40 ? '#d4af37' : '#ef4444' }}
+          >
+            {member.successRate}%
+          </p>
+        </div>
       </div>
 
       {/* Footer */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-ink-secondary">
+      <div className="flex items-center justify-between text-xs text-ink-secondary">
+        <div className="flex items-center gap-1.5">
           <Clock size={11} />
-          <span className="text-xs font-mono">{timeAgo(member.lastSeen)}</span>
+          <span className="font-mono">{timeAgo(member.lastSeen)}</span>
         </div>
-        <ChevronRight
-          size={14}
-          className="text-ink-secondary group-hover:text-ink-primary transition-colors"
-          style={{ color: '#c41e3a' }}
+        <div className="flex items-center gap-1.5">
+          <TrendingUp size={11} />
+          <span className="font-mono">{member.missionsCompleted} missions</span>
+        </div>
+        <ShieldCheck
+          size={13}
+          className="opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{ color: rColor }}
         />
       </div>
     </div>

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, AlertTriangle, XCircle, Plus, Trash2, Save } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, Plus, Trash2, Save, ShieldAlert } from 'lucide-react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import {
   getSpeedoLogs,
   upsertSpeedoLog,
   deleteSpeedoLog,
+  addMemberWarn,
   type SpeedoLogRow,
 } from '../lib/db';
 import type { Member } from '../types';
@@ -59,8 +60,8 @@ function memberStatus(logs: SpeedoLogRow[], dates: string[]): ComplianceStatus {
 
   if (weekTotal >= WEEKLY_QUOTA) return 'ok';
 
-  // Find the most recent day with a speedo this week or before
-  const allLogsDesc = [...logs].sort((a, b) => b.date.localeCompare(a.date));
+  // Find the most recent day with an actual speedo (amount > 0)
+  const allLogsDesc = [...logs].filter((l) => l.amount > 0).sort((a, b) => b.date.localeCompare(a.date));
   const lastLog = allLogsDesc[0];
   if (!lastLog) return 'new';
 
@@ -257,12 +258,14 @@ function DayCell({ date, log, isToday, isFuture, canEdit, onSave, onDelete }: Da
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function SpeedoTracker() {
-  const { members } = useData();
+  const { members, warns, refetchWarns } = useData();
   const { user } = useAuth();
   const [logs, setLogs] = useState<SpeedoLogRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [weekOffset, setWeekOffset] = useState(0);
+  // warnForm: memberId → { open, reason, saving }
+  const [warnForms, setWarnForms] = useState<Record<string, { open: boolean; reason: string; saving: boolean }>>({});
 
   const isBoss = user != null && ['boss', 'oncle', 'segundo'].includes(user.role);
 
@@ -311,7 +314,21 @@ export default function SpeedoTracker() {
     [loadLogs],
   );
 
-  // Week label
+  const handleWarn = useCallback(
+    async (memberId: string, weekStart: string, reason: string) => {
+      if (!user) return;
+      setWarnForms((prev) => ({ ...prev, [memberId]: { ...prev[memberId], saving: true } }));
+      try {
+        await addMemberWarn({ member_id: memberId, week_start: weekStart, reason, issued_by: user.name });
+        await refetchWarns();
+        setWarnForms((prev) => ({ ...prev, [memberId]: { open: false, reason: '', saving: false } }));
+      } catch {
+        setWarnForms((prev) => ({ ...prev, [memberId]: { ...prev[memberId], saving: false } }));
+      }
+    },
+    [user, refetchWarns],
+  );
+
   const weekLabel = useMemo(() => {
     if (weekOffset === 0) return 'Cette semaine';
     if (weekOffset === -1) return 'Semaine dernière';
@@ -319,75 +336,56 @@ export default function SpeedoTracker() {
     return monday.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' });
   }, [weekOffset, dates]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <div
-          className="w-8 h-8 rounded-full animate-spin"
-          style={{ border: '2px solid rgba(196,30,58,0.2)', borderTopColor: '#c41e3a' }}
-        />
-      </div>
+  const summaryStats = useMemo(() => {
+    if (loading) return null;
+    const totals = visibleMembers.map((m) =>
+      logsForMember(m.id, dates).reduce((s, l) => s + l.amount, 0),
     );
-  }
-
-  if (error) {
-    return (
-      <div className="gang-card p-6 text-center">
-        <p className="text-sale text-sm font-mono">{error}</p>
-        <button className="btn-crimson mt-4" onClick={loadLogs}>Réessayer</button>
-      </div>
-    );
-  }
-
-  // Summary stats for this week
-  const weekTotals = visibleMembers.map((m) => {
-    const memberLogs = logsForMember(m.id, dates);
-    return memberLogs.reduce((s, l) => s + l.amount, 0);
-  });
-  const totalSpeedos = weekTotals.reduce((a, b) => a + b, 0);
-  const compliant = visibleMembers.filter((m, i) => weekTotals[i] >= WEEKLY_QUOTA).length;
+    const total = totals.reduce((a, b) => a + b, 0);
+    const compliant = visibleMembers.filter((_, i) => totals[i] >= WEEKLY_QUOTA).length;
+    return { total, compliant };
+  }, [loading, visibleMembers, logsForMember, dates]);
 
   return (
     <div className="space-y-4">
-      {/* Header */}
+      {/* ── Header (always stable, never re-mounts) ── */}
       <div className="gang-card p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h2 className="font-display font-bold text-lg text-ink-primary">Quota Speedo</h2>
           <p className="text-xs text-ink-secondary mt-0.5">
-            Objectif : <strong className="text-ink-primary">3,5 speedos/semaine</strong> · min. 1 tous les 2 jours
+            Objectif&nbsp;: <strong className="text-ink-primary">3,5 speedos / semaine</strong>
+            <span className="mx-1.5 opacity-40">·</span>
+            min. 1 tous les 2 jours
           </p>
         </div>
-
-        {/* Week navigation */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setWeekOffset((w) => w - 1)}
-            className="btn-ghost px-2 py-1 text-sm"
-          >
+          <button onClick={() => setWeekOffset((w) => w - 1)} className="btn-ghost px-3 py-1.5 text-sm">
             ←
           </button>
-          <span className="text-sm font-medium text-ink-primary min-w-[130px] text-center">
+          <span className="text-sm font-medium text-ink-primary min-w-[140px] text-center">
             {weekLabel}
           </span>
           <button
             onClick={() => setWeekOffset((w) => Math.min(0, w + 1))}
             disabled={weekOffset >= 0}
-            className="btn-ghost px-2 py-1 text-sm disabled:opacity-30"
+            className="btn-ghost px-3 py-1.5 text-sm disabled:opacity-30"
           >
             →
           </button>
         </div>
       </div>
 
-      {/* Summary KPIs (boss view) */}
-      {isBoss && (
+      {/* ── Boss KPIs ── */}
+      {isBoss && summaryStats && (
         <div className="grid grid-cols-3 gap-3">
           {[
-            { label: 'Total speedos', value: totalSpeedos.toFixed(1), sub: 'cette semaine' },
-            { label: 'Conformes', value: `${compliant}/${visibleMembers.length}`, sub: 'quota atteint' },
+            { label: 'Total speedos', value: summaryStats.total.toFixed(1), sub: 'cette semaine' },
+            { label: 'Conformes', value: `${summaryStats.compliant}/${visibleMembers.length}`, sub: 'quota atteint' },
             {
               label: 'Taux',
-              value: visibleMembers.length ? `${Math.round((compliant / visibleMembers.length) * 100)}%` : '—',
+              value: visibleMembers.length
+                ? `${Math.round((summaryStats.compliant / visibleMembers.length) * 100)}%`
+                : '—',
               sub: 'de conformité',
             },
           ].map(({ label, value, sub }) => (
@@ -400,13 +398,34 @@ export default function SpeedoTracker() {
         </div>
       )}
 
+      {/* ── Loading / error ── */}
+      {loading && (
+        <div className="flex items-center justify-center py-12">
+          <div className="w-8 h-8 rounded-full animate-spin"
+            style={{ border: '2px solid rgba(196,30,58,0.2)', borderTopColor: '#c41e3a' }} />
+        </div>
+      )}
+      {error && !loading && (
+        <div className="gang-card p-6 text-center">
+          <p className="text-sale text-sm font-mono">{error}</p>
+          <button className="btn-crimson mt-4" onClick={loadLogs}>Réessayer</button>
+        </div>
+      )}
+
       {/* Member grids */}
+      {!loading && !error && (
       <div className="space-y-3">
         {visibleMembers.map((member) => {
           const memberLogs = logsForMember(member.id, dates);
           const weekTotal = memberLogs.reduce((s, l) => s + l.amount, 0);
           const status = memberStatus(memberLogs, dates);
           const canEditThisMember = isBoss;
+          const weekStart = dates[0]; // Monday of displayed week
+          const isPastWeek = weekOffset < 0;
+          const quotaMissed = weekTotal < WEEKLY_QUOTA;
+          const alreadyWarned = warns.some((w) => w.member_id === member.id && w.week_start === weekStart);
+          const memberWarnCount = warns.filter((w) => w.member_id === member.id).length;
+          const form = warnForms[member.id] ?? { open: false, reason: `Quota non atteint (${weekTotal.toFixed(1)}/3.5)`, saving: false };
 
           return (
             <div key={member.id} className="gang-card p-4 space-y-3">
@@ -424,7 +443,18 @@ export default function SpeedoTracker() {
                     {member.initials}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-ink-primary leading-tight truncate">{member.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-ink-primary leading-tight truncate">{member.name}</p>
+                      {memberWarnCount > 0 && (
+                        <span
+                          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-display font-bold flex-shrink-0"
+                          style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444' }}
+                        >
+                          <AlertTriangle size={8} />
+                          {memberWarnCount}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-ink-secondary capitalize">{member.role}</p>
                   </div>
                 </div>
@@ -476,6 +506,64 @@ export default function SpeedoTracker() {
                     ))}
                 </div>
               )}
+
+              {/* ── Warn section (boss, past week, quota missed) ── */}
+              {isBoss && isPastWeek && quotaMissed && (
+                <div className="border-t border-ink-border/60 pt-3">
+                  {alreadyWarned ? (
+                    <div className="flex items-center gap-2 text-xs" style={{ color: '#ef4444' }}>
+                      <ShieldAlert size={12} />
+                      <span className="font-display font-semibold">Avertissement émis pour cette semaine</span>
+                    </div>
+                  ) : form.open ? (
+                    <div className="space-y-2">
+                      <p className="text-xs font-display font-bold uppercase tracking-wider" style={{ color: '#ef4444' }}>
+                        Émettre un avertissement
+                      </p>
+                      <input
+                        type="text"
+                        value={form.reason}
+                        onChange={(e) =>
+                          setWarnForms((prev) => ({ ...prev, [member.id]: { ...form, reason: e.target.value } }))
+                        }
+                        className="w-full bg-bg-base border border-ink-border rounded px-2.5 py-1.5 text-xs text-ink-primary focus:outline-none focus:border-crimson"
+                        placeholder="Motif de l'avertissement"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleWarn(member.id, weekStart, form.reason)}
+                          disabled={form.saving || !form.reason.trim()}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-display font-bold transition-opacity disabled:opacity-50"
+                          style={{ background: '#c41e3a', color: '#fff' }}
+                        >
+                          <ShieldAlert size={11} />
+                          {form.saving ? 'Envoi…' : 'Confirmer'}
+                        </button>
+                        <button
+                          onClick={() => setWarnForms((prev) => ({ ...prev, [member.id]: { ...form, open: false } }))}
+                          className="px-3 py-1.5 rounded text-xs text-ink-secondary hover:text-ink-primary transition-colors"
+                        >
+                          Annuler
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() =>
+                        setWarnForms((prev) => ({
+                          ...prev,
+                          [member.id]: { open: true, reason: `Quota non atteint (${weekTotal.toFixed(1)}/3.5)`, saving: false },
+                        }))
+                      }
+                      className="flex items-center gap-1.5 text-xs font-display font-semibold transition-colors hover:opacity-80"
+                      style={{ color: '#ef4444' }}
+                    >
+                      <ShieldAlert size={12} />
+                      Émettre un avertissement
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -486,6 +574,7 @@ export default function SpeedoTracker() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

@@ -222,6 +222,38 @@ export const reviewMissionReport = async (
   if (error) throw error;
 };
 
+// ── Member warns ─────────────────────────────────────────────────────────────
+
+export interface MemberWarnRow {
+  id: string;
+  member_id: string;
+  week_start: string;   // ISO date "YYYY-MM-DD" (Monday)
+  reason: string;
+  issued_by: string;
+  created_at: string;
+}
+
+export const getMemberWarns = async (): Promise<MemberWarnRow[]> => {
+  const { data, error } = await supabase
+    .from('member_warns')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data as MemberWarnRow[];
+};
+
+export const addMemberWarn = async (
+  warn: Pick<MemberWarnRow, 'member_id' | 'week_start' | 'reason' | 'issued_by'>,
+): Promise<void> => {
+  const { error } = await supabase.from('member_warns').insert(warn);
+  if (error) throw error;
+};
+
+export const deleteMemberWarn = async (id: string): Promise<void> => {
+  const { error } = await supabase.from('member_warns').delete().eq('id', id);
+  if (error) throw error;
+};
+
 // ── Speedo logs ───────────────────────────────────────────────────────────────
 
 export interface SpeedoLogRow {

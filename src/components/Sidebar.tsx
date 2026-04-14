@@ -2,7 +2,6 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Users,
-  Landmark,
   ClipboardList,
   LogOut,
   ShieldAlert,
@@ -14,10 +13,9 @@ import { roleLabel, roleColor } from '../utils/format';
 
 const NAV_ITEMS = [
   { to: '/dashboard',   icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/membres',     icon: Users,           label: 'Membres & Missions' },
-  { to: '/declarations',icon: ClipboardList,   label: 'Déclarations' },
+  { to: '/membres',     icon: Users,           label: 'Membres' },
   { to: '/speedo',      icon: Gauge,           label: 'Quota Speedo' },
-  { to: '/tresorerie',  icon: Landmark,        label: 'Trésorerie' },
+  { to: '/declarations',icon: ClipboardList,   label: 'Déclarations' },
 ];
 
 export default function Sidebar() {

@@ -11,7 +11,9 @@
       "Bash(python3:*)",
       "Bash(node scripts/sync-members-to-db.mjs)",
       "Bash(node scripts/sync-members-to-db.mjs --apply)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(npx --prefix \"/c/Users/Tom GAILLARD/Documents/Github/Martinez-dashboard\" tsc --noEmit)",
+      "Bash(cmd:*)"
     ]
   }
 }

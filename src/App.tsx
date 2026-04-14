@@ -1,19 +1,18 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
-import { Wallet, TrendingUp, Users, Target, ShieldCheck, LogIn } from 'lucide-react';
+import { Users, ShieldCheck, LogIn, Search, Gauge, CheckCircle2, AlertTriangle, Trophy, Crown } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import KPICard from './components/KPICard';
-import ActivityFeed from './components/ActivityFeed';
 import AlertsPanel from './components/AlertsPanel';
-import TopMembersChart from './components/TopMembersChart';
 import MemberCard from './components/MemberCard';
 import MemberModal from './components/MemberModal';
 import SelfReportsPage from './components/SelfReportsPage';
 import SpeedoTracker from './components/SpeedoTracker';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DataProvider, useData } from './context/DataContext';
-import type { Member } from './types';
-import { formatMoney, formatDateTime } from './utils/format';
+import type { Member, Role } from './types';
+import { roleLabel, roleColor } from './utils/format';
+import { getSpeedoLogs, type SpeedoLogRow } from './lib/db';
 import {
   fetchDiscordUser,
   fetchGuildMember,
@@ -160,123 +159,313 @@ function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => voi
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-// ── Trend helpers ─────────────────────────────────────────────────────────────
+// ── Speedo week helpers ───────────────────────────────────────────────────────
 
-const weekBounds = (offsetWeeks: number) => {
+const getCurrentWeekDates = (): string[] => {
   const now = new Date();
   const monday = new Date(now);
-  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7) + offsetWeeks * 7);
+  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
   monday.setHours(0, 0, 0, 0);
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  sunday.setHours(23, 59, 59, 999);
-  return { start: monday, end: sunday };
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
 };
 
-const monthBounds = (offsetMonths: number) => {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth() + offsetMonths, 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + offsetMonths + 1, 0);
-  end.setHours(23, 59, 59, 999);
-  return { start, end };
+const todayISO = () => new Date().toISOString().slice(0, 10);
+
+type SpeedoStatus = 'ok' | 'warning' | 'overdue' | 'new';
+
+const getSpeedoStatus = (weekTotal: number, allLogs: SpeedoLogRow[]): SpeedoStatus => {
+  if (weekTotal >= 3.5) return 'ok';
+  const activeLogs = allLogs.filter((l) => l.amount > 0);
+  const sorted = [...activeLogs].sort((a, b) => b.date.localeCompare(a.date));
+  const last = sorted[0];
+  if (!last) return 'new';
+  const diffDays = Math.floor(
+    (new Date(todayISO()).getTime() - new Date(last.date).getTime()) / 86400000,
+  );
+  if (diffDays > 2) return 'overdue';
+  if (diffDays >= 2) return 'warning';
+  return 'ok';
 };
 
-const sumInRange = (
-  txList: import('./types').Transaction[],
-  start: Date,
-  end: Date,
-) =>
-  txList
-    .filter((t) => { const d = new Date(t.date); return d >= start && d <= end; })
-    .reduce((s, t) => s + t.amount, 0);
-
-const pctTrend = (current: number, previous: number): number => {
-  if (previous === 0) return current > 0 ? 100 : 0;
-  return Math.round(((current - previous) / Math.abs(previous)) * 100);
+const STATUS_CFG: Record<SpeedoStatus, { color: string; label: string }> = {
+  ok:      { color: '#22c55e', label: 'OK' },
+  warning: { color: '#f59e0b', label: 'Attention' },
+  overdue: { color: '#ef4444', label: 'En retard' },
+  new:     { color: '#6b7280', label: 'Aucun log' },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 function DashboardPage() {
-  const { members, missions, transactions, loading, error, refetch } = useData();
+  const { members, warns, loading, error, refetch } = useData();
+  const [speedoLogs, setSpeedoLogs] = useState<SpeedoLogRow[]>([]);
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
 
-  const vaultTotal = useMemo(() => members.reduce((s, m) => s + m.totalEarned, 0), [members]);
-  const weeklyProduction = useMemo(() => members.reduce((s, m) => s + m.weeklyEarned, 0), [members]);
-  const activeMembers = useMemo(() => members.filter((m) => m.active).length, [members]);
-  const activeMissions = useMemo(() => missions.filter((m) => m.status === 'active').length, [missions]);
-  const topMembers = useMemo(
-    () => [...members].sort((a, b) => b.weeklyEarned - a.weeklyEarned).slice(0, 3),
-    [members],
+  useEffect(() => {
+    getSpeedoLogs().then(setSpeedoLogs).catch(console.error);
+  }, []);
+
+  const weekDates = useMemo(() => getCurrentWeekDates(), []);
+  const activeMembers = useMemo(() => members.filter((m) => m.active), [members]);
+
+  const memberStats = useMemo(() =>
+    activeMembers.map((m) => {
+      const memberLogs = speedoLogs.filter((l) => l.member_id === m.id);
+      const weekTotal = memberLogs
+        .filter((l) => weekDates.includes(l.date))
+        .reduce((s, l) => s + l.amount, 0);
+      const status = getSpeedoStatus(weekTotal, memberLogs);
+      return { member: m, weekTotal, status };
+    }),
+    [activeMembers, speedoLogs, weekDates],
   );
 
-  // Tendances calculées depuis les vraies transactions
-  const monthlyTrend = useMemo(() => {
-    const { start: cs, end: ce } = monthBounds(0);
-    const { start: ps, end: pe } = monthBounds(-1);
-    return pctTrend(sumInRange(transactions, cs, ce), sumInRange(transactions, ps, pe));
-  }, [transactions]);
+  const weeklySpeedoTotal = useMemo(
+    () => memberStats.reduce((s, d) => s + d.weekTotal, 0),
+    [memberStats],
+  );
+  const compliantCount = useMemo(
+    () => memberStats.filter((d) => d.weekTotal >= 3.5).length,
+    [memberStats],
+  );
+  const overdueCount = useMemo(
+    () => memberStats.filter((d) => d.status === 'overdue').length,
+    [memberStats],
+  );
 
-  const weeklyTrend = useMemo(() => {
-    const { start: cs, end: ce } = weekBounds(0);
-    const { start: ps, end: pe } = weekBounds(-1);
-    return pctTrend(sumInRange(transactions, cs, ce), sumInRange(transactions, ps, pe));
-  }, [transactions]);
+  // Sorted by alert urgency for AlertsPanel
+  const alertStats = useMemo(() => {
+    const order: Record<SpeedoStatus, number> = { overdue: 0, warning: 1, new: 2, ok: 3 };
+    return [...memberStats].sort((a, b) => order[a.status] - order[b.status]);
+  }, [memberStats]);
 
-  // Taux d'activité des membres (actifs / total)
-  const memberActivityRate = useMemo(() => {
-    if (members.length === 0) return 0;
-    return Math.round((activeMembers / members.length) * 100) - 100;
-  }, [activeMembers, members.length]);
-
-  // Surcharge : missions actives vs membres actifs (>1 mission/membre = surcharge)
-  const missionLoad = useMemo(() => {
-    if (activeMembers === 0) return 0;
-    const ratio = activeMissions / activeMembers;
-    return Math.round((ratio - 1) * 100);
-  }, [activeMissions, activeMembers]);
+  // Sorted by score DESC for the competition leaderboard
+  const leaderboard = useMemo(
+    () => [...memberStats].sort((a, b) => b.weekTotal - a.weekTotal || a.member.name.localeCompare(b.member.name)),
+    [memberStats],
+  );
 
   if (loading) return <LoadingScreen />;
   if (error) return <ErrorScreen message={error} onRetry={refetch} />;
 
   return (
     <>
-      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <KPICard label="Coffre Total" value={formatMoney(vaultTotal)} icon={Wallet} accentColor="#B4005D" trend={monthlyTrend} trendLabel="vs mois dernier" />
-        <KPICard label="Production Hebdo" value={formatMoney(weeklyProduction)} icon={TrendingUp} accentColor="#d4af37" trend={weeklyTrend} trendLabel="vs semaine dernière" />
-        <KPICard label="Membres Actifs" value={String(activeMembers)} subValue={`/ ${members.length}`} icon={Users} accentColor="#22c55e" trend={memberActivityRate} trendLabel="taux d'activité" />
-        <KPICard label="Missions Actives" value={String(activeMissions)} icon={Target} accentColor="#ef4444" trend={missionLoad} trendLabel={missionLoad > 0 ? 'surcharge' : 'charge normale'} />
+      {/* KPIs */}
+      <section className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <KPICard
+          label="Speedos semaine"
+          value={weeklySpeedoTotal.toFixed(1)}
+          icon={Gauge}
+          accentColor="#c41e3a"
+          trendLabel="total équipe cette semaine"
+        />
+        <KPICard
+          label="Membres conformes"
+          value={`${compliantCount}/${activeMembers.length}`}
+          icon={CheckCircle2}
+          accentColor="#22c55e"
+          trendLabel="quota ≥ 3.5 atteint"
+        />
+        <KPICard
+          label="Membres actifs"
+          value={String(activeMembers.length)}
+          subValue={`/ ${members.length}`}
+          icon={Users}
+          accentColor="#d4af37"
+          trendLabel="dans l'équipe"
+        />
+        <KPICard
+          label="En retard"
+          value={String(overdueCount)}
+          icon={AlertTriangle}
+          accentColor="#ef4444"
+          trendLabel="gap > 2 jours sans speedo"
+        />
       </section>
 
+      {/* Competition + Alerts */}
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-4">
-        <div className="xl:col-span-2"><TopMembersChart /></div>
-        <AlertsPanel />
-      </section>
-
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-4">
-        <div className="xl:col-span-2"><ActivityFeed /></div>
-        <div className="gang-card p-5">
-          <h3 className="font-display font-bold text-sm tracking-widest uppercase text-ink-primary mb-4">Top Membres</h3>
-          <div className="space-y-3">
-            {topMembers.map((member, i) => (
-              <MemberCard
-                key={member.id}
-                member={member}
-                mission={missions.find((m) => m.id === member.missionId) ?? null}
-                onClick={() => setSelectedMember(member)}
-                delay={i * 80}
-              />
-            ))}
+        <div className="xl:col-span-2 gang-card p-5">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-2">
+              <Trophy size={15} style={{ color: '#d4af37' }} />
+              <h3 className="font-display font-bold text-sm tracking-widest uppercase text-ink-primary">
+                Classement Speedo
+              </h3>
+            </div>
+            <span className="text-xs font-mono text-ink-secondary bg-bg-elevated px-2 py-1 rounded border border-ink-border">
+              Objectif 3.5
+            </span>
           </div>
+
+          {leaderboard.length === 0 && (
+            <p className="text-xs text-ink-secondary text-center py-8">Aucun membre actif.</p>
+          )}
+
+          {/* ── Podium top 3 ── */}
+          {leaderboard.length >= 1 && (() => {
+            const RANKS = [
+              { idx: 1, color: '#94a3b8', base: 52, label: '2' },
+              { idx: 0, color: '#d4af37', base: 80, label: '1' },
+              { idx: 2, color: '#b87333', base: 36, label: '3' },
+            ];
+            return (
+              <div className="flex items-end justify-center gap-2 mb-6 px-2">
+                {RANKS.map(({ idx, color, base, label }) => {
+                  const entry = leaderboard[idx];
+                  if (!entry) return null;
+                  const { member, weekTotal, status } = entry;
+                  const pct = Math.min(100, (weekTotal / 3.5) * 100);
+                  const done = weekTotal >= 3.5;
+                  return (
+                    <div
+                      key={member.id}
+                      className="flex flex-col items-center flex-1 max-w-[140px] cursor-pointer group"
+                      onClick={() => setSelectedMember(member)}
+                    >
+                      {/* Crown for #1 */}
+                      {idx === 0 && done && (
+                        <Crown size={14} className="mb-1" style={{ color: '#d4af37' }} />
+                      )}
+                      {idx === 0 && !done && (
+                        <div className="h-[18px] mb-1" />
+                      )}
+
+                      {/* Card */}
+                      <div
+                        className="w-full rounded-t px-3 py-3 text-center transition-all group-hover:scale-[1.02]"
+                        style={{
+                          background: `linear-gradient(180deg, ${color}12 0%, ${color}06 100%)`,
+                          border: `1px solid ${color}30`,
+                          borderBottom: 'none',
+                        }}
+                      >
+                        {/* Avatar */}
+                        <div
+                          className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-display font-black mx-auto mb-2"
+                          style={{
+                            background: `linear-gradient(135deg, ${color}30, ${color}50)`,
+                            border: `2px solid ${color}70`,
+                            color,
+                            boxShadow: idx === 0 ? `0 0 18px ${color}40` : 'none',
+                          }}
+                        >
+                          {member.initials}
+                        </div>
+                        {/* Name */}
+                        <p className="text-xs font-display font-bold text-ink-primary truncate leading-tight">
+                          {member.name.split(' ')[0]}
+                        </p>
+                        {/* Score */}
+                        <p
+                          className="font-mono font-black text-lg leading-tight mt-0.5"
+                          style={{ color }}
+                        >
+                          {weekTotal.toFixed(1)}
+                        </p>
+                        {/* Mini progress */}
+                        <div className="h-1 rounded-full bg-bg-hover overflow-hidden mt-2">
+                          <div
+                            className="h-full rounded-full"
+                            style={{ width: `${pct}%`, background: color }}
+                          />
+                        </div>
+                        {done && (
+                          <p className="text-[9px] font-display font-bold tracking-wider mt-1.5" style={{ color }}>
+                            QUOTA ✓
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Pedestal */}
+                      <div
+                        className="w-full flex items-center justify-center rounded-b font-display font-black text-lg"
+                        style={{
+                          height: base,
+                          background: `linear-gradient(180deg, ${color}25 0%, ${color}10 100%)`,
+                          border: `1px solid ${color}40`,
+                          color,
+                          textShadow: `0 0 12px ${color}80`,
+                        }}
+                      >
+                        #{label}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* ── Leaderboard rows (4th+) ── */}
+          {leaderboard.length > 3 && (
+            <div className="space-y-1.5 border-t border-ink-border pt-4">
+              {leaderboard.slice(3).map(({ member, weekTotal, status }, i) => {
+                const cfg = STATUS_CFG[status];
+                const pct = Math.min(100, (weekTotal / 3.5) * 100);
+                const rank = i + 4;
+                return (
+                  <div
+                    key={member.id}
+                    className="flex items-center gap-3 px-2 py-2 rounded cursor-pointer group hover:bg-bg-hover transition-colors"
+                    onClick={() => setSelectedMember(member)}
+                  >
+                    <span className="text-xs font-mono text-ink-secondary w-5 text-right flex-shrink-0">
+                      #{rank}
+                    </span>
+                    <div
+                      className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-display font-bold flex-shrink-0"
+                      style={{
+                        background: `${roleColor(member.role)}20`,
+                        border: `1px solid ${roleColor(member.role)}40`,
+                        color: roleColor(member.role),
+                      }}
+                    >
+                      {member.initials}
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                      <p className="text-xs font-medium text-ink-primary truncate group-hover:text-white transition-colors">
+                        {member.name}
+                      </p>
+                      {warns.filter((w) => w.member_id === member.id).length > 0 && (
+                        <span className="flex items-center gap-0.5 px-1 py-0.5 rounded text-[8px] font-bold flex-shrink-0"
+                          style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>
+                          <AlertTriangle size={8} />
+                          {warns.filter((w) => w.member_id === member.id).length}
+                        </span>
+                      )}
+                    </div>
+                    <div className="w-24 flex-shrink-0">
+                      <div className="h-1.5 rounded-full bg-bg-hover overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: cfg.color }} />
+                      </div>
+                    </div>
+                    <span className="text-xs font-mono flex-shrink-0 w-14 text-right" style={{ color: cfg.color }}>
+                      {weekTotal.toFixed(1)}/3.5
+                    </span>
+                    <span
+                      className="text-[9px] font-display font-bold tracking-wider px-1.5 py-0.5 rounded flex-shrink-0"
+                      style={{ color: cfg.color, background: `${cfg.color}15` }}
+                    >
+                      {cfg.label}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
+
+        <AlertsPanel speedoStats={alertStats} speedoLogs={speedoLogs} weekDates={weekDates} />
       </section>
 
       {selectedMember && (
-        <MemberModal
-          member={selectedMember}
-          mission={missions.find((m) => m.id === selectedMember.missionId) ?? null}
-          onClose={() => setSelectedMember(null)}
-        />
+        <MemberModal member={selectedMember} onClose={() => setSelectedMember(null)} />
       )}
     </>
   );
@@ -284,35 +473,116 @@ function DashboardPage() {
 
 // ── Members page ──────────────────────────────────────────────────────────────
 
+const ROLE_ORDER: Role[] = ['boss', 'oncle', 'segundo', 'capo', 'bandito', 'soldato', 'recrue', 'associe'];
+
 function MembersPage() {
-  const { members, missions, loading, error, refetch } = useData();
+  const { members, warns, loading, error, refetch } = useData();
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all');
+  const [activeOnly, setActiveOnly] = useState(false);
+
+  const presentRoles = useMemo(
+    () => ROLE_ORDER.filter((r) => members.some((m) => m.role === r)),
+    [members],
+  );
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return members
+      .filter((m) => !activeOnly || m.active)
+      .filter((m) => roleFilter === 'all' || m.role === roleFilter)
+      .filter((m) => !q || m.name.toLowerCase().includes(q) || m.discordTag.toLowerCase().includes(q))
+      .sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role));
+  }, [members, search, roleFilter, activeOnly]);
+
+  const handleSelect = useCallback((m: Member) => setSelectedMember(m), []);
 
   if (loading) return <LoadingScreen />;
   if (error) return <ErrorScreen message={error} onRetry={refetch} />;
 
   return (
     <>
-      <section className="gang-card p-5 mb-4">
-        <h2 className="font-display font-bold text-lg text-ink-primary">Membres & Missions</h2>
-        <p className="text-sm text-ink-secondary mt-1">
-          Vue opérationnelle complète des profils, performance et mission en cours.
-        </p>
+      {/* Header + controls */}
+      <section className="gang-card p-5 mb-4 space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-display font-bold text-lg text-ink-primary">Membres</h2>
+            <p className="text-sm text-ink-secondary mt-0.5">
+              {filtered.length} / {members.length} membre{members.length > 1 ? 's' : ''}
+            </p>
+          </div>
+          {/* Active toggle */}
+          <button
+            onClick={() => setActiveOnly((v) => !v)}
+            className="flex items-center gap-2 text-xs px-3 py-1.5 rounded transition-colors flex-shrink-0"
+            style={{
+              background: activeOnly ? 'rgba(34,197,94,0.12)' : 'rgba(255,255,255,0.04)',
+              border: `1px solid ${activeOnly ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
+              color: activeOnly ? '#22c55e' : '#94a3b8',
+            }}
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full"
+              style={{ background: activeOnly ? '#22c55e' : '#94a3b8', boxShadow: activeOnly ? '0 0 5px #22c55e' : 'none' }}
+            />
+            Actifs seulement
+          </button>
+        </div>
+
+        {/* Search */}
+        <div className="relative">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-secondary pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Rechercher par nom ou tag Discord…"
+            className="w-full bg-bg-base border border-ink-border rounded pl-8 pr-4 py-2 text-sm text-ink-primary placeholder-ink-secondary/50 focus:outline-none focus:border-crimson transition-colors"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-secondary hover:text-ink-primary text-xs"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {/* Role filter pills */}
+        <div className="flex flex-wrap gap-2">
+          {(['all', ...presentRoles] as const).map((r) => (
+            <button
+              key={r}
+              onClick={() => setRoleFilter(r)}
+              className="text-xs px-3 py-1 rounded font-display font-semibold tracking-wider transition-all"
+              style={
+                roleFilter === r
+                  ? { background: 'rgba(196,30,58,0.15)', color: '#c41e3a', border: '1px solid rgba(196,30,58,0.35)' }
+                  : { background: 'rgba(255,255,255,0.04)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.08)' }
+              }
+            >
+              {r === 'all' ? 'Tous' : roleLabel(r)}
+            </button>
+          ))}
+        </div>
       </section>
 
+      {/* Grid */}
       <section className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
-        {members.length === 0 && (
-          <div className="gang-card p-5 md:col-span-2 2xl:col-span-3">
-            <p className="text-sm text-ink-secondary">Aucun membre à afficher.</p>
+        {filtered.length === 0 && (
+          <div className="gang-card p-8 md:col-span-2 2xl:col-span-3 text-center">
+            <p className="text-sm text-ink-secondary">Aucun membre ne correspond à ces filtres.</p>
           </div>
         )}
-        {members.map((member, i) => (
+        {filtered.map((member, i) => (
           <MemberCard
             key={member.id}
             member={member}
-            mission={missions.find((m) => m.id === member.missionId) ?? null}
-            onClick={() => setSelectedMember(member)}
-            delay={i * 50}
+            warnCount={warns.filter((w) => w.member_id === member.id).length}
+            onClick={() => handleSelect(member)}
+            delay={i * 40}
           />
         ))}
       </section>
@@ -320,93 +590,9 @@ function MembersPage() {
       {selectedMember && (
         <MemberModal
           member={selectedMember}
-          mission={missions.find((m) => m.id === selectedMember.missionId) ?? null}
           onClose={() => setSelectedMember(null)}
         />
       )}
-    </>
-  );
-}
-
-// ── Treasury page ─────────────────────────────────────────────────────────────
-
-function TreasuryPage() {
-  const { members, transactions, loading, error, refetch } = useData();
-
-  const totalPropre = useMemo(
-    () => transactions.filter((t) => t.type === 'PROPRE').reduce((s, t) => s + t.amount, 0),
-    [transactions],
-  );
-  const totalSale = useMemo(
-    () => transactions.filter((t) => t.type === 'SALE').reduce((s, t) => s + t.amount, 0),
-    [transactions],
-  );
-  const lastTen = useMemo(() => transactions.slice(0, 10), [transactions]);
-
-  if (loading) return <LoadingScreen />;
-  if (error) return <ErrorScreen message={error} onRetry={refetch} />;
-
-  return (
-    <>
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        <KPICard label="Flux Propre" value={formatMoney(totalPropre)} icon={Wallet} accentColor="#22c55e" trend={9} />
-        <KPICard label="Flux Sale" value={formatMoney(totalSale)} icon={TrendingUp} accentColor="#ef4444" trend={5} />
-      </section>
-
-      <section className="gang-card p-5 overflow-x-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="font-display font-bold text-sm tracking-widest uppercase text-ink-primary">
-            Dernières Transactions
-          </h2>
-          <span className="text-xs text-ink-secondary font-mono">10 entrées</span>
-        </div>
-
-        <table className="w-full min-w-[680px] text-sm">
-          <thead>
-            <tr className="text-left text-ink-secondary text-xs uppercase tracking-wider border-b border-ink-border">
-              <th className="py-2">Date</th>
-              <th className="py-2">Membre</th>
-              <th className="py-2">Activité</th>
-              <th className="py-2">Type</th>
-              <th className="py-2 text-right">Montant</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lastTen.length === 0 && (
-              <tr>
-                <td className="py-3 text-ink-secondary text-sm" colSpan={5}>Aucune transaction.</td>
-              </tr>
-            )}
-            {lastTen.map((tx) => {
-              const member = members.find((m) => m.id === tx.memberId);
-              return (
-                <tr key={tx.id} className="table-row-hover border-b border-ink-border/70">
-                  <td className="py-2.5 text-ink-secondary font-mono">{formatDateTime(tx.date)}</td>
-                  <td className="py-2.5 text-ink-primary">{member?.name ?? 'Inconnu'}</td>
-                  <td className="py-2.5 text-ink-primary">{tx.activity}</td>
-                  <td className="py-2.5">
-                    <span
-                      className="text-xs font-display font-semibold tracking-wider px-1.5 py-0.5 rounded-sm"
-                      style={{
-                        background: tx.type === 'PROPRE' ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
-                        color: tx.type === 'PROPRE' ? '#22c55e' : '#ef4444',
-                      }}
-                    >
-                      {tx.type}
-                    </span>
-                  </td>
-                  <td
-                    className="py-2.5 text-right font-mono font-semibold"
-                    style={{ color: tx.type === 'PROPRE' ? '#22c55e' : '#ef4444' }}
-                  >
-                    {formatMoney(tx.amount)}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </section>
     </>
   );
 }
@@ -443,7 +629,6 @@ function AuthenticatedLayout() {
           <Route path="/membres" element={<MembersPage />} />
           <Route path="/declarations" element={<SelfReportsPage />} />
           <Route path="/speedo" element={<SpeedoTracker />} />
-          <Route path="/tresorerie" element={<TreasuryPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>
