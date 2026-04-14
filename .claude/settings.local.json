@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dir C:\\\\Users\\\\Tom GAILLARD\\\\Documents\\\\Github\\\\Martinez-dashboard:*)"
+      "Bash(dir C:\\\\Users\\\\Tom GAILLARD\\\\Documents\\\\Github\\\\Martinez-dashboard:*)",
+      "Bash(node scripts/sync-discord-names.mjs)"
     ]
   }
 }
