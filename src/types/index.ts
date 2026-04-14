@@ -1,4 +1,4 @@
-export type Role = 'boss' | 'capo' | 'soldato' | 'associe';
+export type Role = 'boss' | 'oncle' | 'segundo' | 'capo' | 'bandito' | 'soldato' | 'recrue' | 'associe';
 export type MoneyType = 'SALE' | 'PROPRE';
 export type ActivityType =
   | 'Transport'
@@ -63,4 +63,5 @@ export interface AuthUser {
   discordTag: string;
   role: Role;
   initials: string;
+  avatarUrl?: string;
 }

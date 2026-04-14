@@ -113,16 +113,25 @@ export default function Sidebar() {
         {user && (
           <div className="flex items-center gap-3">
             {/* Avatar */}
-            <div
-              className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-display font-bold flex-shrink-0"
-              style={{
-                background: `linear-gradient(135deg, ${roleColor(user.role)}33, ${roleColor(user.role)}55)`,
-                border: `1px solid ${roleColor(user.role)}66`,
-                color: roleColor(user.role),
-              }}
-            >
-              {user.initials}
-            </div>
+            {user.avatarUrl ? (
+              <img
+                src={user.avatarUrl}
+                alt={user.name}
+                className="w-8 h-8 rounded-full flex-shrink-0 object-cover"
+                style={{ border: `1px solid ${roleColor(user.role)}66` }}
+              />
+            ) : (
+              <div
+                className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-display font-bold flex-shrink-0"
+                style={{
+                  background: `linear-gradient(135deg, ${roleColor(user.role)}33, ${roleColor(user.role)}55)`,
+                  border: `1px solid ${roleColor(user.role)}66`,
+                  color: roleColor(user.role),
+                }}
+              >
+                {user.initials}
+              </div>
+            )}
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-ink-primary truncate leading-tight">
                 {user.name}
