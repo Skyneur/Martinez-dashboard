@@ -1,12 +1,70 @@
-import { X, Calendar, TrendingUp, Clock, Hash, AlertTriangle, Trash2 } from 'lucide-react';
-import type { Member } from '../types';
+import { useEffect, useMemo, useState } from 'react';
+import { X, Calendar, Clock, Hash, AlertTriangle, Trash2, Gauge, CheckCircle2, XCircle } from 'lucide-react';
+import type { Member } from '../types/index';
 import {
   roleLabel, roleColor, roleBgColor,
-  formatMoney, formatDate, timeAgo,
+  formatDate, timeAgo,
 } from '../utils/format';
 import { useData } from '../context/DataContext';
-import { deleteMemberWarn } from '../lib/db';
+import { deleteMemberWarn, getSpeedoLogs, type SpeedoLogRow } from '../lib/db';
 import { useAuth } from '../context/AuthContext';
+
+const WEEKLY_QUOTA = 3.5;
+const MAX_GAP_DAYS = 2;
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function getMondayOf(d: Date): Date {
+  const copy = new Date(d);
+  const diff = (copy.getDay() + 6) % 7;
+  copy.setDate(copy.getDate() - diff);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function currentWeekDates(): string[] {
+  const monday = getMondayOf(new Date());
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+}
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
+
+function shortDate(iso: string): string {
+  return new Date(iso + 'T12:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+}
+
+type ComplianceStatus = 'ok' | 'warning' | 'overdue' | 'new';
+
+function getStatus(logs: SpeedoLogRow[], weekDates: string[]): ComplianceStatus {
+  const today = todayISO();
+  const weekTotal = weekDates.reduce((s, d) => {
+    const l = logs.find((x) => x.date === d);
+    return s + (l?.amount ?? 0);
+  }, 0);
+  if (weekTotal >= WEEKLY_QUOTA) return 'ok';
+  const active = [...logs].filter((l) => l.amount > 0).sort((a, b) => b.date.localeCompare(a.date));
+  const last = active[0];
+  if (!last) return 'new';
+  const diff = Math.floor(
+    (new Date(today + 'T12:00:00').getTime() - new Date(last.date + 'T12:00:00').getTime()) / 86400000,
+  );
+  if (diff > MAX_GAP_DAYS) return 'overdue';
+  if (diff >= MAX_GAP_DAYS) return 'warning';
+  return 'ok';
+}
+
+const STATUS_CFG: Record<ComplianceStatus, { color: string; bg: string; label: string; icon: typeof CheckCircle2 }> = {
+  ok:      { color: '#22c55e', bg: 'rgba(34,197,94,0.12)',   label: 'Quota OK',    icon: CheckCircle2  },
+  warning: { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  label: 'Attention',   icon: AlertTriangle },
+  overdue: { color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   label: 'En retard',   icon: XCircle       },
+  new:     { color: '#6b7280', bg: 'rgba(107,114,128,0.12)', label: 'Aucun log',   icon: AlertTriangle },
+};
+
+// ── Props ──────────────────────────────────────────────────────────────────────
 
 interface MemberModalProps {
   member: Member;
@@ -14,12 +72,25 @@ interface MemberModalProps {
   onClose: () => void;
 }
 
+// ── Component ──────────────────────────────────────────────────────────────────
+
 export default function MemberModal({ member, onClose }: MemberModalProps) {
-  const { transactions, warns, refetchWarns } = useData();
+  const { warns, refetchWarns } = useData();
   const { user } = useAuth();
   const rColor = roleColor(member.role);
   const rBg = roleBgColor(member.role);
   const isBoss = user != null && ['boss', 'oncle', 'segundo'].includes(user.role);
+
+  const [speedoLogs, setSpeedoLogs] = useState<SpeedoLogRow[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(true);
+
+  useEffect(() => {
+    getSpeedoLogs()
+      .then((all) => setSpeedoLogs(all.filter((l) => l.member_id === member.id)))
+      .finally(() => setLoadingLogs(false));
+  }, [member.id]);
+
+  // ── Warns ──────────────────────────────────────────────────────────────────
 
   const memberWarns = warns
     .filter((w) => w.member_id === member.id)
@@ -30,10 +101,47 @@ export default function MemberModal({ member, onClose }: MemberModalProps) {
     await refetchWarns();
   };
 
-  const memberTx = transactions
-    .filter((t) => t.memberId === member.id)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 6);
+  // ── Speedo stats ───────────────────────────────────────────────────────────
+
+  const weekDates = useMemo(() => currentWeekDates(), []);
+
+  const weekTotal = useMemo(
+    () => weekDates.reduce((s, d) => {
+      const l = speedoLogs.find((x) => x.date === d);
+      return s + (l?.amount ?? 0);
+    }, 0),
+    [speedoLogs, weekDates],
+  );
+
+  const status = useMemo(() => getStatus(speedoLogs, weekDates), [speedoLogs, weekDates]);
+  const cfg = STATUS_CFG[status];
+  const StatusIcon = cfg.icon;
+
+  const quotaPct = Math.min(100, Math.round((weekTotal / WEEKLY_QUOTA) * 100));
+  const barColor = weekTotal >= WEEKLY_QUOTA ? '#22c55e' : weekTotal >= WEEKLY_QUOTA * 0.5 ? '#f59e0b' : '#ef4444';
+
+  const totalSpeedos = useMemo(
+    () => speedoLogs.filter((l) => l.amount > 0).reduce((s, l) => s + l.amount, 0),
+    [speedoLogs],
+  );
+
+  // Count weeks where quota was met
+  const weeksCompleted = useMemo(() => {
+    const byWeek: Record<string, number> = {};
+    for (const l of speedoLogs.filter((x) => x.amount > 0)) {
+      const monday = getMondayOf(new Date(l.date + 'T12:00:00')).toISOString().slice(0, 10);
+      byWeek[monday] = (byWeek[monday] ?? 0) + l.amount;
+    }
+    return Object.values(byWeek).filter((v) => v >= WEEKLY_QUOTA).length;
+  }, [speedoLogs]);
+
+  // Last 8 sessions (amount > 0), sorted by date desc
+  const recentSessions = useMemo(
+    () => [...speedoLogs].filter((l) => l.amount > 0).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8),
+    [speedoLogs],
+  );
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div
@@ -41,7 +149,7 @@ export default function MemberModal({ member, onClose }: MemberModalProps) {
       onClick={onClose}
     >
       <div
-        className="gang-card w-full max-w-lg max-h-[88vh] overflow-y-auto animate-slide-in-right"
+        className="gang-card w-full max-w-lg max-h-[88vh] overflow-y-auto animate-fade-in-up"
         style={{ borderColor: `${rColor}30` }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -82,9 +190,7 @@ export default function MemberModal({ member, onClose }: MemberModalProps) {
                 >
                   {roleLabel(member.role)}
                 </span>
-                <span
-                  className="inline-flex items-center gap-1 text-xs text-ink-secondary font-mono"
-                >
+                <span className="inline-flex items-center gap-1 text-xs text-ink-secondary font-mono">
                   <Hash size={9} />
                   {member.discordTag}
                 </span>
@@ -99,16 +205,56 @@ export default function MemberModal({ member, onClose }: MemberModalProps) {
           </button>
         </div>
 
-        {/* ── Financial stats ── */}
+        {/* ── Quota semaine en cours ── */}
+        <div className="p-5 border-b border-ink-border">
+          <div className="flex items-center gap-2 mb-3">
+            <Gauge size={13} style={{ color: rColor }} />
+            <p className="text-xs font-display font-bold tracking-widest uppercase text-ink-secondary">
+              Quota semaine en cours
+            </p>
+            <span
+              className="ml-auto inline-flex items-center gap-1 text-xs font-display font-semibold px-2 py-0.5 rounded"
+              style={{ color: cfg.color, background: cfg.bg }}
+            >
+              <StatusIcon size={10} />
+              {cfg.label}
+            </span>
+          </div>
+
+          {loadingLogs ? (
+            <div className="h-2 rounded-full bg-bg-hover animate-pulse" />
+          ) : (
+            <>
+              <div className="flex items-center gap-3 mb-2">
+                <div className="flex-1 h-2 rounded-full bg-bg-hover overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{ width: `${quotaPct}%`, background: barColor }}
+                  />
+                </div>
+                <span className="text-sm font-mono font-bold flex-shrink-0" style={{ color: barColor }}>
+                  {weekTotal.toFixed(1)}<span className="text-ink-secondary font-normal">/3.5</span>
+                </span>
+              </div>
+              <p className="text-xs text-ink-secondary">
+                {weekTotal >= WEEKLY_QUOTA
+                  ? 'Quota atteint cette semaine'
+                  : `Il manque encore ${(WEEKLY_QUOTA - weekTotal).toFixed(1)} speedo(s)`}
+              </p>
+            </>
+          )}
+        </div>
+
+        {/* ── Stats globales ── */}
         <div className="p-5 border-b border-ink-border">
           <p className="text-xs font-display font-bold tracking-widest uppercase text-ink-secondary mb-3">
-            Finances
+            Statistiques
           </p>
           <div className="grid grid-cols-3 gap-3">
             {[
-              { label: 'Cette semaine', value: formatMoney(member.weeklyEarned),  color: '#d4af37' },
-              { label: 'Ce mois',       value: formatMoney(member.monthlyEarned), color: rColor },
-              { label: 'Total cumulé',  value: formatMoney(member.totalEarned),   color: '#22c55e' },
+              { label: 'Total speedos', value: totalSpeedos.toFixed(1), color: rColor },
+              { label: 'Semaines OK',   value: String(weeksCompleted),  color: '#22c55e' },
+              { label: 'Warns',         value: String(memberWarns.length), color: memberWarns.length > 0 ? '#ef4444' : '#6b7280' },
             ].map(({ label, value, color }) => (
               <div
                 key={label}
@@ -122,92 +268,41 @@ export default function MemberModal({ member, onClose }: MemberModalProps) {
           </div>
         </div>
 
-        {/* ── Performance stats ── */}
+        {/* ── Dernières sessions ── */}
         <div className="px-5 pt-4 pb-4 border-b border-ink-border">
           <p className="text-xs font-display font-bold tracking-widest uppercase text-ink-secondary mb-3">
-            Performance
+            Dernières sessions
           </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div
-              className="rounded p-3 flex items-center gap-3"
-              style={{ background: 'rgba(30,30,46,0.5)', border: '1px solid rgba(42,42,62,0.6)' }}
-            >
-              <TrendingUp size={18} style={{ color: rColor, flexShrink: 0 }} />
-              <div>
-                <p className="font-mono text-lg font-bold text-ink-primary leading-tight">
-                  {member.missionsCompleted}
-                </p>
-                <p className="text-xs text-ink-secondary">Missions terminées</p>
-              </div>
+          {loadingLogs ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-8 rounded bg-bg-hover animate-pulse" />
+              ))}
             </div>
-            <div
-              className="rounded p-3 flex items-center gap-3"
-              style={{ background: 'rgba(30,30,46,0.5)', border: '1px solid rgba(42,42,62,0.6)' }}
-            >
-              <div
-                className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-mono font-bold flex-shrink-0"
-                style={{
-                  background: member.successRate >= 70
-                    ? 'rgba(34,197,94,0.15)'
-                    : member.successRate >= 40
-                    ? 'rgba(212,175,55,0.15)'
-                    : 'rgba(239,68,68,0.15)',
-                  color: member.successRate >= 70 ? '#22c55e' : member.successRate >= 40 ? '#d4af37' : '#ef4444',
-                }}
-              >
-                {member.successRate}%
-              </div>
-              <div>
-                <p
-                  className="font-mono text-lg font-bold leading-tight"
-                  style={{ color: member.successRate >= 70 ? '#22c55e' : member.successRate >= 40 ? '#d4af37' : '#ef4444' }}
-                >
-                  {member.successRate}%
-                </p>
-                <p className="text-xs text-ink-secondary">Taux de succès</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Dernières transactions ── */}
-        <div className="px-5 pt-4 pb-4 border-b border-ink-border">
-          <p className="text-xs font-display font-bold tracking-widest uppercase text-ink-secondary mb-3">
-            Dernières Transactions
-          </p>
-          {memberTx.length === 0 ? (
-            <p className="text-sm text-ink-secondary italic">Aucune transaction enregistrée.</p>
+          ) : recentSessions.length === 0 ? (
+            <p className="text-sm text-ink-secondary italic">Aucune session enregistrée.</p>
           ) : (
             <div className="space-y-0">
-              {memberTx.map((tx) => (
+              {recentSessions.map((l) => (
                 <div
-                  key={tx.id}
+                  key={l.id}
                   className="flex items-center justify-between py-2.5 border-b border-ink-border/50 last:border-0"
                 >
                   <div className="flex items-center gap-2.5">
                     <div
                       className="w-1.5 h-5 rounded-full flex-shrink-0"
-                      style={{ background: tx.type === 'PROPRE' ? '#22c55e' : '#ef4444' }}
+                      style={{ background: rColor }}
                     />
                     <div>
-                      <p className="text-xs text-ink-primary font-medium">{tx.activity}</p>
-                      <p className="text-xs text-ink-secondary font-mono">{timeAgo(tx.date)}</p>
+                      <p className="text-xs text-ink-primary font-medium">
+                        {l.note || 'Farm Weed'}
+                      </p>
+                      <p className="text-xs text-ink-secondary font-mono">{shortDate(l.date)}</p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p
-                      className="font-mono text-sm font-bold"
-                      style={{ color: tx.type === 'PROPRE' ? '#22c55e' : '#ef4444' }}
-                    >
-                      {formatMoney(tx.amount)}
-                    </p>
-                    <span
-                      className="text-[10px] font-display font-semibold tracking-wider"
-                      style={{ color: tx.type === 'PROPRE' ? '#22c55e88' : '#ef444488' }}
-                    >
-                      {tx.type}
-                    </span>
-                  </div>
+                  <span className="font-mono text-sm font-bold" style={{ color: rColor }}>
+                    +{l.amount}
+                  </span>
                 </div>
               ))}
             </div>
