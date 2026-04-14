@@ -8,8 +8,8 @@ import AlertsPanel from './components/AlertsPanel';
 import TopMembersChart from './components/TopMembersChart';
 import MemberCard from './components/MemberCard';
 import MemberModal from './components/MemberModal';
-import OperationsPlanner from './components/OperationsPlanner';
 import SelfReportsPage from './components/SelfReportsPage';
+import SpeedoTracker from './components/SpeedoTracker';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DataProvider, useData } from './context/DataContext';
 import type { Member } from './types';
@@ -97,7 +97,7 @@ function DiscordCallbackPage() {
           fetchDiscordUser(token),
           fetchGuildMember(token),
         ]);
-        const authUser = mapDiscordUserToAuthUser(discordUser, guildMember);
+        const authUser = await mapDiscordUserToAuthUser(discordUser, guildMember);
         login(authUser);
         window.history.replaceState(null, '', '/dashboard');
         navigate('/dashboard', { replace: true });
@@ -160,8 +160,45 @@ function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => voi
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
+// ── Trend helpers ─────────────────────────────────────────────────────────────
+
+const weekBounds = (offsetWeeks: number) => {
+  const now = new Date();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7) + offsetWeeks * 7);
+  monday.setHours(0, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  return { start: monday, end: sunday };
+};
+
+const monthBounds = (offsetMonths: number) => {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() + offsetMonths, 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + offsetMonths + 1, 0);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+};
+
+const sumInRange = (
+  txList: import('./types').Transaction[],
+  start: Date,
+  end: Date,
+) =>
+  txList
+    .filter((t) => { const d = new Date(t.date); return d >= start && d <= end; })
+    .reduce((s, t) => s + t.amount, 0);
+
+const pctTrend = (current: number, previous: number): number => {
+  if (previous === 0) return current > 0 ? 100 : 0;
+  return Math.round(((current - previous) / Math.abs(previous)) * 100);
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function DashboardPage() {
-  const { members, missions, loading, error, refetch } = useData();
+  const { members, missions, transactions, loading, error, refetch } = useData();
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
 
   const vaultTotal = useMemo(() => members.reduce((s, m) => s + m.totalEarned, 0), [members]);
@@ -173,16 +210,42 @@ function DashboardPage() {
     [members],
   );
 
+  // Tendances calculées depuis les vraies transactions
+  const monthlyTrend = useMemo(() => {
+    const { start: cs, end: ce } = monthBounds(0);
+    const { start: ps, end: pe } = monthBounds(-1);
+    return pctTrend(sumInRange(transactions, cs, ce), sumInRange(transactions, ps, pe));
+  }, [transactions]);
+
+  const weeklyTrend = useMemo(() => {
+    const { start: cs, end: ce } = weekBounds(0);
+    const { start: ps, end: pe } = weekBounds(-1);
+    return pctTrend(sumInRange(transactions, cs, ce), sumInRange(transactions, ps, pe));
+  }, [transactions]);
+
+  // Taux d'activité des membres (actifs / total)
+  const memberActivityRate = useMemo(() => {
+    if (members.length === 0) return 0;
+    return Math.round((activeMembers / members.length) * 100) - 100;
+  }, [activeMembers, members.length]);
+
+  // Surcharge : missions actives vs membres actifs (>1 mission/membre = surcharge)
+  const missionLoad = useMemo(() => {
+    if (activeMembers === 0) return 0;
+    const ratio = activeMissions / activeMembers;
+    return Math.round((ratio - 1) * 100);
+  }, [activeMissions, activeMembers]);
+
   if (loading) return <LoadingScreen />;
   if (error) return <ErrorScreen message={error} onRetry={refetch} />;
 
   return (
     <>
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <KPICard label="Coffre Total" value={formatMoney(vaultTotal)} icon={Wallet} accentColor="#B4005D" trend={12} trendLabel="vs mois dernier" />
-        <KPICard label="Production Hebdo" value={formatMoney(weeklyProduction)} icon={TrendingUp} accentColor="#d4af37" trend={7} />
-        <KPICard label="Membres Actifs" value={String(activeMembers)} subValue={`/ ${members.length}`} icon={Users} accentColor="#22c55e" trend={0} />
-        <KPICard label="Missions Actives" value={String(activeMissions)} icon={Target} accentColor="#ef4444" trend={-3} trendLabel="surcharge" />
+        <KPICard label="Coffre Total" value={formatMoney(vaultTotal)} icon={Wallet} accentColor="#B4005D" trend={monthlyTrend} trendLabel="vs mois dernier" />
+        <KPICard label="Production Hebdo" value={formatMoney(weeklyProduction)} icon={TrendingUp} accentColor="#d4af37" trend={weeklyTrend} trendLabel="vs semaine dernière" />
+        <KPICard label="Membres Actifs" value={String(activeMembers)} subValue={`/ ${members.length}`} icon={Users} accentColor="#22c55e" trend={memberActivityRate} trendLabel="taux d'activité" />
+        <KPICard label="Missions Actives" value={String(activeMissions)} icon={Target} accentColor="#ef4444" trend={missionLoad} trendLabel={missionLoad > 0 ? 'surcharge' : 'charge normale'} />
       </section>
 
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-4">
@@ -236,8 +299,6 @@ function MembersPage() {
           Vue opérationnelle complète des profils, performance et mission en cours.
         </p>
       </section>
-
-      <OperationsPlanner members={members} />
 
       <section className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
         {members.length === 0 && (
@@ -381,6 +442,7 @@ function AuthenticatedLayout() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/membres" element={<MembersPage />} />
           <Route path="/declarations" element={<SelfReportsPage />} />
+          <Route path="/speedo" element={<SpeedoTracker />} />
           <Route path="/tresorerie" element={<TreasuryPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

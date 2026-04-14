@@ -7,15 +7,17 @@ import {
   LogOut,
   ShieldAlert,
   ChevronRight,
+  Gauge,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { roleLabel, roleColor } from '../utils/format';
 
 const NAV_ITEMS = [
-  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/membres',   icon: Users,           label: 'Membres & Missions' },
-  { to: '/declarations', icon: ClipboardList, label: 'Déclarations' },
-  { to: '/tresorerie',icon: Landmark,        label: 'Trésorerie' },
+  { to: '/dashboard',   icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/membres',     icon: Users,           label: 'Membres & Missions' },
+  { to: '/declarations',icon: ClipboardList,   label: 'Déclarations' },
+  { to: '/speedo',      icon: Gauge,           label: 'Quota Speedo' },
+  { to: '/tresorerie',  icon: Landmark,        label: 'Trésorerie' },
 ];
 
 export default function Sidebar() {

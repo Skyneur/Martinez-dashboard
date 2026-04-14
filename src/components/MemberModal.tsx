@@ -4,7 +4,7 @@ import {
   roleLabel, roleColor, roleBgColor,
   formatMoney, formatDate, timeAgo
 } from '../utils/format';
-import { TRANSACTIONS } from '../data/mockData';
+import { useData } from '../context/DataContext';
 
 interface MemberModalProps {
   member: Member;
@@ -13,11 +13,12 @@ interface MemberModalProps {
 }
 
 export default function MemberModal({ member, mission, onClose }: MemberModalProps) {
+  const { transactions } = useData();
   const rColor = roleColor(member.role);
   const rBg = roleBgColor(member.role);
 
-  const memberTx = TRANSACTIONS
-    .filter(t => t.memberId === member.id)
+  const memberTx = transactions
+    .filter((t) => t.memberId === member.id)
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 5);
 
@@ -29,7 +30,7 @@ export default function MemberModal({ member, mission, onClose }: MemberModalPro
       <div
         className="gang-card w-full max-w-lg max-h-[85vh] overflow-y-auto animate-slide-in-right"
         style={{ borderColor: `${rColor}30` }}
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div
@@ -154,7 +155,7 @@ export default function MemberModal({ member, mission, onClose }: MemberModalPro
               <p className="text-sm text-ink-secondary italic">Aucune transaction récente.</p>
             ) : (
               <div className="space-y-2">
-                {memberTx.map(tx => (
+                {memberTx.map((tx) => (
                   <div
                     key={tx.id}
                     className="flex items-center justify-between py-2 border-b border-ink-border last:border-0"

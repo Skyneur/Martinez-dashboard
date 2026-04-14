@@ -1,4 +1,4 @@
-import { TRANSACTIONS, MEMBERS } from '../data/mockData';
+import { useData } from '../context/DataContext';
 import { formatMoney, timeAgo, roleColor } from '../utils/format';
 import type { ActivityType } from '../types';
 
@@ -13,14 +13,14 @@ const ACTIVITY_ICONS: Record<ActivityType, string> = {
 };
 
 export default function ActivityFeed() {
-  // Show last 10 transactions sorted by date desc
-  const recent = [...TRANSACTIONS]
+  const { transactions, members } = useData();
+
+  const recent = [...transactions]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 10);
 
   return (
     <div className="gang-card p-5 flex flex-col h-full">
-      {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <h3 className="font-display font-bold text-sm tracking-widest uppercase text-ink-primary">
           Flux d'Activité
@@ -34,7 +34,6 @@ export default function ActivityFeed() {
         </div>
       </div>
 
-      {/* Feed */}
       <div className="flex-1 overflow-y-auto space-y-2 pr-1 stagger-children" style={{ maxHeight: 340 }}>
         {recent.length === 0 && (
           <p className="text-xs text-ink-secondary text-center py-6">
@@ -42,7 +41,7 @@ export default function ActivityFeed() {
           </p>
         )}
         {recent.map((tx, i) => {
-          const member = MEMBERS.find(m => m.id === tx.memberId);
+          const member = members.find((m) => m.id === tx.memberId);
           if (!member) return null;
           const isNew = i < 3;
 
@@ -56,7 +55,6 @@ export default function ActivityFeed() {
                 animationDelay: `${i * 50}ms`,
               }}
             >
-              {/* Avatar */}
               <div
                 className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-display font-bold flex-shrink-0"
                 style={{
@@ -68,7 +66,6 @@ export default function ActivityFeed() {
                 {member.initials}
               </div>
 
-              {/* Content */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-0.5">
                   <span className="text-xs font-medium text-ink-primary truncate">
@@ -84,7 +81,6 @@ export default function ActivityFeed() {
                 </span>
               </div>
 
-              {/* Right side */}
               <div className="flex flex-col items-end gap-1 flex-shrink-0">
                 <span
                   className="font-mono text-sm font-bold"

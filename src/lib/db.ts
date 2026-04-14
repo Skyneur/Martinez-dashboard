@@ -63,6 +63,7 @@ export interface WeeklyAssignmentRow {
 
 const toMember = (r: MemberRow): Member => ({
   id: r.id,
+  discordId: r.discord_id,
   name: r.name,
   initials: r.initials,
   role: r.role as Role,
@@ -174,5 +175,128 @@ export const upsertWeeklyAssignment = async (a: WeeklyAssignmentRow): Promise<vo
 
 export const deleteWeeklyAssignment = async (id: string): Promise<void> => {
   const { error } = await supabase.from('weekly_assignments').delete().eq('id', id);
+  if (error) throw error;
+};
+
+// ── Mission Reports ───────────────────────────────────────────────────────────
+
+export interface MissionReportRow {
+  id: string;
+  member_id: string;
+  mission_label: string;
+  details: string;
+  completed_at: string;
+  proof_data: string | null;
+  status: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string;
+}
+
+export const getMissionReports = async (): Promise<MissionReportRow[]> => {
+  const { data, error } = await supabase
+    .from('mission_reports')
+    .select('*')
+    .order('completed_at', { ascending: false });
+  if (error) throw error;
+  return data as MissionReportRow[];
+};
+
+export const addMissionReport = async (
+  report: Omit<MissionReportRow, 'id' | 'reviewed_by' | 'reviewed_at' | 'review_note'>,
+): Promise<void> => {
+  const { error } = await supabase.from('mission_reports').insert(report);
+  if (error) throw error;
+};
+
+export const reviewMissionReport = async (
+  id: string,
+  status: string,
+  reviewedBy: string,
+  reviewNote: string,
+): Promise<void> => {
+  const { error } = await supabase
+    .from('mission_reports')
+    .update({ status, reviewed_by: reviewedBy, reviewed_at: new Date().toISOString(), review_note: reviewNote })
+    .eq('id', id);
+  if (error) throw error;
+};
+
+// ── Speedo logs ───────────────────────────────────────────────────────────────
+
+export interface SpeedoLogRow {
+  id: string;
+  member_id: string;
+  date: string;       // ISO date "YYYY-MM-DD"
+  amount: number;     // e.g. 0.5, 1, 1.5, 2 …
+  note: string;
+  created_at: string;
+}
+
+export const getSpeedoLogs = async (): Promise<SpeedoLogRow[]> => {
+  const { data, error } = await supabase
+    .from('speedo_logs')
+    .select('*')
+    .order('date', { ascending: false });
+  if (error) throw error;
+  return data as SpeedoLogRow[];
+};
+
+export const upsertSpeedoLog = async (
+  log: Pick<SpeedoLogRow, 'member_id' | 'date' | 'amount' | 'note'>,
+): Promise<void> => {
+  const { error } = await supabase
+    .from('speedo_logs')
+    .upsert(log, { onConflict: 'member_id,date' });
+  if (error) throw error;
+};
+
+export const deleteSpeedoLog = async (id: string): Promise<void> => {
+  const { error } = await supabase.from('speedo_logs').delete().eq('id', id);
+  if (error) throw error;
+};
+
+// ── Money Reports ─────────────────────────────────────────────────────────────
+
+export interface MoneyReportRow {
+  id: string;
+  member_id: string;
+  amount: number;
+  source: string;
+  notes: string;
+  submitted_at: string;
+  proof_data: string | null;
+  status: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string;
+}
+
+export const getMoneyReports = async (): Promise<MoneyReportRow[]> => {
+  const { data, error } = await supabase
+    .from('money_reports')
+    .select('*')
+    .order('submitted_at', { ascending: false });
+  if (error) throw error;
+  return data as MoneyReportRow[];
+};
+
+export const addMoneyReport = async (
+  report: Omit<MoneyReportRow, 'id' | 'reviewed_by' | 'reviewed_at' | 'review_note'>,
+): Promise<void> => {
+  const { error } = await supabase.from('money_reports').insert(report);
+  if (error) throw error;
+};
+
+export const reviewMoneyReport = async (
+  id: string,
+  status: string,
+  reviewedBy: string,
+  reviewNote: string,
+): Promise<void> => {
+  const { error } = await supabase
+    .from('money_reports')
+    .update({ status, reviewed_by: reviewedBy, reviewed_at: new Date().toISOString(), review_note: reviewNote })
+    .eq('id', id);
   if (error) throw error;
 };

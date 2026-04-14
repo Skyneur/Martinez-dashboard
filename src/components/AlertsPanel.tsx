@@ -1,11 +1,15 @@
 import { AlertTriangle, Clock, User } from 'lucide-react';
-import { ACTIVE_MEMBERS, INACTIVE_MEMBERS, MEMBERS } from '../data/mockData';
+import { useData } from '../context/DataContext';
 import { roleLabel, roleColor, timeAgo } from '../utils/format';
 
 export default function AlertsPanel() {
+  const { members } = useData();
+
+  const activeMembers = members.filter((m) => m.active).length;
+  const inactiveMembers = members.filter((m) => !m.active);
+
   return (
     <div className="gang-card p-5">
-      {/* Header */}
       <div className="flex items-center gap-2 mb-5">
         <div
           className="w-6 h-6 rounded flex items-center justify-center"
@@ -24,17 +28,16 @@ export default function AlertsPanel() {
             color: '#ef4444',
           }}
         >
-          {INACTIVE_MEMBERS.length}
+          {inactiveMembers.length}
         </span>
       </div>
 
-      {INACTIVE_MEMBERS.length === 0 ? (
+      {inactiveMembers.length === 0 ? (
         <p className="text-xs text-ink-secondary text-center py-4">
           Aucune alerte active
         </p>
       ) : (
         <div className="space-y-3">
-          {/* Alert header */}
           <div
             className="flex items-center gap-2 px-3 py-2 rounded text-xs"
             style={{
@@ -46,7 +49,7 @@ export default function AlertsPanel() {
             <span className="text-ink-secondary">Membres sans activité cette semaine</span>
           </div>
 
-          {INACTIVE_MEMBERS.map((member, i) => (
+          {inactiveMembers.map((member, i) => (
             <div
               key={member.id}
               className="flex items-center gap-3 p-3 rounded animate-entry"
@@ -56,7 +59,6 @@ export default function AlertsPanel() {
                 animationDelay: `${i * 80}ms`,
               }}
             >
-              {/* Avatar */}
               <div
                 className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-display font-bold flex-shrink-0"
                 style={{
@@ -69,7 +71,6 @@ export default function AlertsPanel() {
                 {member.initials}
               </div>
 
-              {/* Info */}
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-ink-primary font-medium truncate">{member.name}</p>
                 <div className="flex items-center gap-1.5 mt-0.5">
@@ -86,7 +87,6 @@ export default function AlertsPanel() {
                 </div>
               </div>
 
-              {/* Offline indicator */}
               <div
                 className="w-2 h-2 rounded-full flex-shrink-0"
                 style={{ background: '#ef4444', opacity: 0.6 }}
@@ -96,13 +96,12 @@ export default function AlertsPanel() {
         </div>
       )}
 
-      {/* Separator */}
       <div className="mt-4 pt-4 border-t border-ink-border">
         <div className="flex items-center gap-2">
           <User size={11} className="text-ink-secondary" />
           <span className="text-xs text-ink-secondary">
-            <span className="font-mono text-propre">{ACTIVE_MEMBERS}</span>
-            {' '}/ {MEMBERS.length} membres actifs cette semaine
+            <span className="font-mono text-propre">{activeMembers}</span>
+            {' '}/ {members.length} membres actifs cette semaine
           </span>
         </div>
       </div>

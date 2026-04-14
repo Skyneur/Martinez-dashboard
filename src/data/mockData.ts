@@ -77,7 +77,7 @@ export const MEMBERS: Member[] = [
   {
     id: '252142042690355200',
     name: 'Enzo Martinez | Tonton',
-    initials: 'ET',
+    initials: 'EM',
     role: 'capo',
     discordTag: '@tontonbsx',
     discordAvatar: null,

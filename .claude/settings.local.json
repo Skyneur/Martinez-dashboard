@@ -8,7 +8,10 @@
       "Bash(npm install:*)",
       "Skill(update-config)",
       "Bash(curl:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(node scripts/sync-members-to-db.mjs)",
+      "Bash(node scripts/sync-members-to-db.mjs --apply)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }

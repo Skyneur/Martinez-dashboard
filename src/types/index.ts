@@ -13,6 +13,7 @@ export type MissionStatus = 'active' | 'completed' | 'failed';
 
 export interface Member {
   id: string;
+  discordId?: string | null;
   name: string;
   initials: string;
   role: Role;

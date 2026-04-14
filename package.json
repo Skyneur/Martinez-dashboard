@@ -8,7 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "sync:discord": "node scripts/sync-discord-names.mjs",
-    "sync:discord:apply": "node scripts/sync-discord-names.mjs --apply"
+    "sync:discord:apply": "node scripts/sync-discord-names.mjs --apply",
+    "sync:members": "node scripts/sync-members-to-db.mjs",
+    "sync:members:apply": "node scripts/sync-members-to-db.mjs --apply"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.0",

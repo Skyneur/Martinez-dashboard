@@ -1,5 +1,5 @@
 import type { AuthUser, Role } from '../types';
-import { DISCORD_MEMBER_LINKS, MEMBERS } from '../data/mockData';
+import { supabase } from '../lib/supabase';
 
 const DISCORD_STATE_KEY = 'martinez.discord.oauth.state';
 const GUILD_ID = '1216193153498091561';
@@ -82,94 +82,16 @@ const buildDiscordTag = (user: DiscordUserResponse): string => {
   return `@${user.username}`;
 };
 
-const normalizeIdentity = (value: string): string =>
-  value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '')
-    .trim();
+// ── Supabase lookup ───────────────────────────────────────────────────────────
 
-const splitAliases = (value: string): string[] =>
-  value
-    .split(/[|/,_\-.\s]+/)
-    .map((part) => normalizeIdentity(part))
-    .filter(Boolean);
-
-const bigrams = (value: string): Set<string> => {
-  if (value.length < 2) return new Set([value]);
-  const out = new Set<string>();
-  for (let i = 0; i < value.length - 1; i += 1) {
-    out.add(value.slice(i, i + 2));
-  }
-  return out;
-};
-
-const diceSimilarity = (left: string, right: string): number => {
-  if (left === right) return 1;
-  if (!left || !right) return 0;
-
-  const a = bigrams(left);
-  const b = bigrams(right);
-  let intersection = 0;
-
-  for (const item of a) {
-    if (b.has(item)) intersection += 1;
-  }
-
-  return (2 * intersection) / (a.size + b.size);
-};
-
-const scoreAliasMatch = (a: string, b: string): number => {
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-  if (a.includes(b) || b.includes(a)) return 0.9;
-  return diceSimilarity(a, b);
-};
-
-const buildDiscordAliases = (user: DiscordUserResponse, discordTag: string): string[] => {
-  const raw = [
-    user.id,
-    user.username,
-    user.global_name ?? '',
-    discordTag,
-    `@${user.username}`,
-  ];
-
-  const normalized = raw.map(normalizeIdentity).filter(Boolean);
-  const split = raw.flatMap(splitAliases);
-  return Array.from(new Set([...normalized, ...split]));
-};
-
-const buildMemberAliases = (member: (typeof MEMBERS)[number]): string[] => {
-  const raw = [member.id, member.name, member.discordTag, member.discordTag.replace('@', '')];
-  const normalized = raw.map(normalizeIdentity).filter(Boolean);
-  const split = raw.flatMap(splitAliases);
-  return Array.from(new Set([...normalized, ...split]));
-};
-
-const autoMatchMember = (discordUser: DiscordUserResponse, discordTag: string) => {
-  const discordAliases = buildDiscordAliases(discordUser, discordTag);
-  let best: { member: (typeof MEMBERS)[number]; score: number } | null = null;
-
-  for (const member of MEMBERS) {
-    const memberAliases = buildMemberAliases(member);
-    let localBest = 0;
-
-    for (const d of discordAliases) {
-      for (const m of memberAliases) {
-        const score = scoreAliasMatch(d, m);
-        if (score > localBest) localBest = score;
-      }
-    }
-
-    if (!best || localBest > best.score) {
-      best = { member, score: localBest };
-    }
-  }
-
-  // Seuil assez strict pour eviter les mauvais rattachements automatiques.
-  return best && best.score >= 0.86 ? best.member : null;
+const fetchMemberByDiscordId = async (discordId: string) => {
+  const { data } = await supabase
+    .from('members')
+    .select('id, name, initials, discord_tag')
+    .eq('discord_id', discordId)
+    .limit(1)
+    .maybeSingle();
+  return data as { id: string; name: string; initials: string; discord_tag: string } | null;
 };
 
 const randomState = (): string => {
@@ -257,10 +179,10 @@ export const fetchGuildMember = async (accessToken: string): Promise<DiscordGuil
   return (await res.json()) as DiscordGuildMember;
 };
 
-export const mapDiscordUserToAuthUser = (
+export const mapDiscordUserToAuthUser = async (
   discordUser: DiscordUserResponse,
   guildMember?: DiscordGuildMember | null,
-): AuthUser => {
+): Promise<AuthUser> => {
   const discordTag = buildDiscordTag(discordUser);
   const role = guildMember ? getRoleFromGuild(guildMember.roles) : 'associe';
 
@@ -276,51 +198,20 @@ export const mapDiscordUserToAuthUser = (
     guildMember?.avatar,
   );
 
-  const linkedMemberId = [discordUser.id, discordUser.username, discordUser.global_name ?? '', discordTag, `@${discordUser.username}`]
-    .map(normalizeIdentity)
-    .find((key) => DISCORD_MEMBER_LINKS[key]);
-
-  if (linkedMemberId) {
-    const mappedMember = MEMBERS.find((member) => member.id === DISCORD_MEMBER_LINKS[linkedMemberId]);
-    if (mappedMember) {
-      return {
-        id: mappedMember.id,
-        name: serverNick || mappedMember.name,
-        initials: toInitials(serverNick || mappedMember.name),
-        discordTag: mappedMember.discordTag,
-        role,
-        avatarUrl,
-      };
-    }
-  }
-
-  const matchedMember = MEMBERS.find(
-    (member) => member.discordTag.toLowerCase() === discordTag.toLowerCase(),
-  );
-
-  if (matchedMember) {
+  // Lookup Supabase par Discord ID
+  const dbMember = await fetchMemberByDiscordId(discordUser.id);
+  if (dbMember) {
     return {
-      id: matchedMember.id,
-      name: serverNick || matchedMember.name,
-      initials: toInitials(serverNick || matchedMember.name),
-      discordTag: matchedMember.discordTag,
+      id: dbMember.id,
+      name: serverNick || dbMember.name,
+      initials: toInitials(serverNick || dbMember.name),
+      discordTag: dbMember.discord_tag,
       role,
       avatarUrl,
     };
   }
 
-  const autoMatchedMember = autoMatchMember(discordUser, discordTag);
-  if (autoMatchedMember) {
-    return {
-      id: autoMatchedMember.id,
-      name: serverNick || autoMatchedMember.name,
-      initials: toInitials(serverNick || autoMatchedMember.name),
-      discordTag: autoMatchedMember.discordTag,
-      role,
-      avatarUrl,
-    };
-  }
-
+  // Membre non trouvé en base — accès invité
   return {
     id: discordUser.id,
     name: displayName,

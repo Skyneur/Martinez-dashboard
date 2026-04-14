@@ -8,7 +8,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { WEEKLY_DATA } from '../data/mockData';
+import { useData } from '../context/DataContext';
 import { formatMoney } from '../utils/format';
 
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -39,6 +39,18 @@ const formatYAxis = (value: number) => {
 };
 
 export default function TopMembersChart() {
+  const { members } = useData();
+
+  const weeklyData = [...members]
+    .sort((a, b) => b.weeklyEarned - a.weeklyEarned)
+    .slice(0, 5)
+    .filter((m) => m.weeklyEarned > 0)
+    .map((m) => ({
+      name: m.name.split(' ')[0],
+      amount: m.weeklyEarned,
+      memberId: m.id,
+    }));
+
   return (
     <div className="gang-card p-5">
       <div className="flex items-center justify-between mb-5">
@@ -50,50 +62,50 @@ export default function TopMembersChart() {
         </span>
       </div>
 
-      {WEEKLY_DATA.length === 0 ? (
+      {weeklyData.length === 0 ? (
         <div className="h-[220px] flex items-center justify-center">
           <p className="text-xs text-ink-secondary">Aucune donnée hebdomadaire.</p>
         </div>
       ) : (
-      <ResponsiveContainer width="100%" height={220}>
-        <BarChart
-          data={WEEKLY_DATA}
-          layout="vertical"
-          margin={{ top: 0, right: 16, bottom: 0, left: 0 }}
-          barCategoryGap="25%"
-        >
-          <CartesianGrid
-            horizontal={false}
-            stroke="rgba(30,30,46,0.8)"
-            strokeDasharray="3 3"
-          />
-          <XAxis
-            type="number"
-            tickFormatter={formatYAxis}
-            tick={{ fill: '#5a5a7a', fontSize: 11, fontFamily: 'Share Tech Mono' }}
-            axisLine={false}
-            tickLine={false}
-          />
-          <YAxis
-            type="category"
-            dataKey="name"
-            width={68}
-            tick={{ fill: '#8a8aaa', fontSize: 12, fontFamily: 'DM Sans', fontWeight: 500 }}
-            axisLine={false}
-            tickLine={false}
-          />
-          <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(196,30,58,0.05)' }} />
-          <Bar dataKey="amount" radius={[0, 3, 3, 0]} maxBarSize={20}>
-            {WEEKLY_DATA.map((_, index) => (
-              <Cell
-                key={`cell-${index}`}
-                fill={index === 0 ? '#d4af37' : index === 1 ? '#c41e3a' : '#8b1528'}
-                fillOpacity={index === 0 ? 1 : index === 1 ? 0.9 : 0.6 + (index * 0.05)}
-              />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart
+            data={weeklyData}
+            layout="vertical"
+            margin={{ top: 0, right: 16, bottom: 0, left: 0 }}
+            barCategoryGap="25%"
+          >
+            <CartesianGrid
+              horizontal={false}
+              stroke="rgba(30,30,46,0.8)"
+              strokeDasharray="3 3"
+            />
+            <XAxis
+              type="number"
+              tickFormatter={formatYAxis}
+              tick={{ fill: '#5a5a7a', fontSize: 11, fontFamily: 'Share Tech Mono' }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              type="category"
+              dataKey="name"
+              width={68}
+              tick={{ fill: '#8a8aaa', fontSize: 12, fontFamily: 'DM Sans', fontWeight: 500 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(196,30,58,0.05)' }} />
+            <Bar dataKey="amount" radius={[0, 3, 3, 0]} maxBarSize={20}>
+              {weeklyData.map((_, index) => (
+                <Cell
+                  key={`cell-${index}`}
+                  fill={index === 0 ? '#d4af37' : index === 1 ? '#c41e3a' : '#8b1528'}
+                  fillOpacity={index === 0 ? 1 : index === 1 ? 0.9 : 0.6 + index * 0.05}
+                />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
       )}
     </div>
   );
